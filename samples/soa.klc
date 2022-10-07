@@ -1,0 +1,66 @@
+
+impl<T> Proxy<T> for T {
+    fn into(&self) -> T {
+        self
+    }
+
+    fn from(&mut self, val: T) {
+        if T impls Copy {
+            *self = val;
+        } else {
+            assert(T impls Clone);
+
+            self.clone_from(val);
+        }
+    }
+}
+
+pub comptime fn RefStruct(T: struct type) -> struct type {
+    struct {}
+        .register_fields(|builder| {
+            for (field_name, field_type) in T.fields.iter() {
+                builder.append_field(field_name, &mut field_type);
+            }
+        })
+}
+
+impl Proxy<T> for Ref(T) {
+    fn into(&self) -> T {
+        T.construct(
+            RefT.fields.iter()
+                .map((name, _) (name, *self.get_field(name)))
+                .collect()
+        )
+    }
+
+    fn from(&mut self, val: T) {
+        for (name, _) in T.fields {
+            *self.get_field(name) = val.get_field(name);
+        }
+    }
+}
+
+pub comptime fn SOA(T: [S: struct type; N] type) -> struct type {
+    struct {}
+        .register_fields(|builder| {
+            for (field_name, field_type) in T.fields.iter() {
+                builder.append_field(field_name, [field_type; N]);
+            }
+        })
+}
+
+impl Indexable for SOA(T) where T: [S: struct type; N] type {
+    type ElementType = RefStruct(S);
+
+    fn get(&mut self, index: usize) -> ElementType {
+        RefStruct(S).construct(
+            SOA(T)
+                .fields
+                .iter()
+                .map(|(name, _)| {
+                    (name, &mut self.get_field(name)[index])
+                })
+                .collect()
+        )
+    }
+}
