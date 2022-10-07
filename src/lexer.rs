@@ -3,7 +3,7 @@ use std::{cmp::{min, max}, str::Chars};
 
 
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Span {
     start: usize,
     end: usize,
@@ -18,6 +18,7 @@ pub enum Token<'a> {
     Unknown(Span),
     Identifier(&'a str, Span),
     NumberLiteral(Vec<u8>, Span),
+    StringLiteral(&'a str, Span),
 
     // keywords
     Function(Span),
@@ -85,6 +86,17 @@ impl Span {
             end_column,
         }
     }
+
+    pub fn after(&self) -> Span {
+        Span {
+            start: self.end,
+            end: self.end,
+            start_line: self.end_line,
+            end_line: self.end_line,
+            start_column: self.end_column,
+            end_column: self.end_column,
+        }
+    }
 }
 
 impl<'a> Token<'a> {
@@ -113,7 +125,8 @@ impl<'a> Token<'a> {
             Plus(span) |
             Minus(span) |
             Asterisk(span) |
-            Slash(span) => *span
+            Slash(span) |
+            StringLiteral(_, span) => *span
         }
     }
 }
@@ -205,6 +218,7 @@ impl<'a> Lexer<'a> {
                 '}' => RBrace(self.span()),
                 ';' => Semicolon(self.span()),
                 '=' => Equals(self.span()),
+                '"' => self.lex_string(),
                 '+' | '-' | '*' | '/' | '<' | '>' => self.lex_operator(),
                 _ => self.lex_number_or_name(),
             };
@@ -218,6 +232,40 @@ impl<'a> Lexer<'a> {
         }
 
         (tokens, self.errors.clone())
+    }
+
+    fn lex_string(&mut self) -> Token<'a> {
+        assert!(self.char() == '"');
+
+        self.inc_index();
+
+
+        let start_byte = self.byte_index;
+        let start_span = self.span();
+
+        let mut escape = false;
+        while self.char_index < self.source_len {
+            if self.char() == '"' && !escape {
+                break;
+            }
+
+            escape = if self.char() == '\\' {
+                !escape // if we already escape, then we just escaped the backslash itself
+            } else {
+                false
+            };
+
+            self.inc_index();
+        }
+
+        let end_byte = self.byte_index;
+
+        self.inc_index();
+
+        let span = start_span.merge(self.span_excl());
+        let string = &self.source[start_byte..end_byte];
+
+        Token::StringLiteral(string, span)
     }
 
     fn lex_operator(&mut self) -> Token<'a> {
