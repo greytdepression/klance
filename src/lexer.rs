@@ -1,17 +1,6 @@
 use core::num;
 use std::{cmp::{min, max}, str::Chars};
-
-
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Span {
-    start: usize,
-    end: usize,
-    start_line: usize,
-    end_line: usize,
-    start_column: usize,
-    end_column: usize,
-}
+use crate::{Span, Error};
 
 #[derive(Debug, Clone)]
 pub enum Token<'a> {
@@ -45,11 +34,6 @@ pub enum Token<'a> {
     Slash(Span),
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum LexingError {
-    Generic(Span),
-}
-
 pub struct Lexer<'a> {
     source: &'a str,
     source_chars: Vec<char>,
@@ -58,46 +42,10 @@ pub struct Lexer<'a> {
     line_index: usize,
     column_index: usize,
     source_len: usize,
-    errors: Vec<LexingError>,
+    errors: Vec<Error>,
 }
 
 // Implementations
-
-impl Span {
-    pub fn merge(self, other: Span) -> Span {
-        let (start, start_line, start_column) = if self.start <= other.start {
-            (self.start, self.start_line, self.start_column)
-        } else {
-            (other.start, other.start_line, other.start_column)
-        };
-
-        let (end, end_line, end_column) = if self.end >= other.end {
-            (self.end, self.end_line, self.end_column)
-        } else {
-            (other.end, other.end_line, other.end_column)
-        };
-
-        Span {
-            start,
-            end,
-            start_line,
-            end_line,
-            start_column,
-            end_column,
-        }
-    }
-
-    pub fn after(&self) -> Span {
-        Span {
-            start: self.end,
-            end: self.end,
-            start_line: self.end_line,
-            end_line: self.end_line,
-            start_column: self.end_column,
-            end_column: self.end_column,
-        }
-    }
-}
 
 impl<'a> Token<'a> {
     pub fn span(&self) -> Span {

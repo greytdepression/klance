@@ -1,4 +1,5 @@
-use crate::lexer::{Span, Token};
+use crate::{Span, Error};
+use crate::lexer::Token;
 
 #[derive(Debug, Clone)]
 pub struct ParsedStruct<'src> {
@@ -122,16 +123,10 @@ pub enum Mutability {
 // Parser
 //--------------------------------------------------
 
-#[derive(Debug, Clone)]
-pub enum ParserError {
-    Error(String, Span),
-    WithHint(String, Span, String, Span),
-}
-
 pub struct Parser<'src> {
     tokens: Vec<Token<'src>>,
     token_index: usize,
-    errors: Vec<ParserError>,
+    errors: Vec<Error>,
 }
 
 impl<'src> Parser<'src> {
@@ -143,7 +138,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    pub fn errors<'a>(&'a self) -> &'a Vec<ParserError> {
+    pub fn errors<'a>(&'a self) -> &'a Vec<Error> {
         &self.errors
     }
 
@@ -226,7 +221,7 @@ impl<'src> Parser<'src> {
     fn expect_inc(&mut self) -> bool {
         if !self.inc() {
 
-            self.errors.push(ParserError::Error(
+            self.errors.push(Error::Error(
                 "Unexpected end of token stream in function definition.".into(),
                 self.tokens[self.tokens.len() - 1].span().after()
             ));
@@ -274,7 +269,7 @@ impl<'src> Parser<'src> {
                     return None;
                 }
             } else {
-                self.errors.push(ParserError::WithHint(
+                self.errors.push(Error::WithHint(
                     "Unexpected token in function definition.".into(),
                     name_span,
                     format!("Expected Identifier token for function name; instead got:\n{:?}", self.token().unwrap()),
@@ -315,7 +310,7 @@ impl<'src> Parser<'src> {
             fun_span = fun_span.merge(code_blk.span);
             code_block = Some(code_blk);
         } else {
-            self.errors.push(ParserError::Error(
+            self.errors.push(Error::Error(
                 "Function definition lacks executable block.".into(),
                 fun_span.after()
             ));
@@ -408,7 +403,7 @@ impl<'src> Parser<'src> {
         }
 
         if !matches!(self.token(), Some(Semicolon(_))) {
-            self.errors.push(ParserError::WithHint(
+            self.errors.push(Error::WithHint(
                 "Statement misses semicolon".into(),
                 maybe_span.unwrap(),
                 "Add a semicolon at the end of the statement.".into(),
@@ -474,7 +469,7 @@ impl<'src> Parser<'src> {
 
         // 5. Assignment equal sign
         if !matches!(self.token(), Some(Equals(_))) {
-            self.errors.push(ParserError::WithHint(
+            self.errors.push(Error::WithHint(
                 "Variable definition requires assignment!".into(),
                 total_span,
                 format!(
