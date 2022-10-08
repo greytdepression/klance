@@ -189,7 +189,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn lex(&mut self) -> (Vec<Token<'a>>, Vec<LexingError>) {
+    pub fn lex(&mut self) -> Vec<Token<'a>> {
         let mut tokens = Vec::with_capacity(self.source.len());
 
         assert!(self.source_len == self.source_chars.len());
@@ -231,7 +231,7 @@ impl<'a> Lexer<'a> {
             tokens.push(token);
         }
 
-        (tokens, self.errors.clone())
+        tokens
     }
 
     fn lex_string(&mut self) -> Token<'a> {
