@@ -2,9 +2,12 @@
 
 mod lexer;
 mod parser;
+mod util;
 
 use lexer::Lexer;
 use parser::Parser;
+
+pub use util::{Span, Error};
 
 fn main() {
     let source = include_str!("../samples/test1.klc");
