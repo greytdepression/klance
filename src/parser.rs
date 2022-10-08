@@ -89,19 +89,26 @@ pub struct ParsedCodeBlock<'src> {
 
 #[derive(Debug, Clone)]
 pub enum ParsedStatement<'src> {
-    Expression(ParsedExpression),
+    Expression(ParsedExpression, HasSemicolon),
     VariableDefinition(ParsedVariableDefinition<'src>),
     ConstantDefinition(ParsedConstantDefinition<'src>),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum HasSemicolon {
+    Yes,
+    No,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedVariableDefinition<'src> {
     name: &'src str,
     name_span: Span,
-    type_name: &'src str,
-    type_span: Span,
+    type_name: Option<&'src str>,
+    type_span: Option<Span>,
     mutability: Mutability,
-    mutability_span: Span,
+    mutability_span: Option<Span>,
+    initial_value: ParsedExpression,
     span: Span,
 }
 
@@ -350,9 +357,12 @@ impl<'src> Parser<'src> {
         }
 
         // TODO: 2. Code ig
+        let mut statements = vec![];
         while !matches!(self.token(), Some(RBrace(_))) {
-            if !self.expect_inc() {
-                return None;
+            if let Some(stmt) = self.parse_statement() {
+                statements.push(stmt);
+            } else {
+                break;
             }
         }
 
@@ -361,11 +371,158 @@ impl<'src> Parser<'src> {
             self.inc();
 
             return Some(ParsedCodeBlock {
-                statements: vec![],
+                statements,
                 span: self.span(),
             })
         }
 
         None
+    }
+
+    fn parse_statement(&mut self) -> Option<ParsedStatement<'src>> {
+        use Token::*;
+
+        if !self.has_token() {
+            return None;
+        }
+
+        let mut maybe_stmt: Option<ParsedStatement<'src>> = None;
+        let start_span = self.token().unwrap().span();
+        let mut maybe_span = None;
+
+        // Check if there is a variable definition
+        if let Some(defn) = self.parse_variable_definition() {
+            maybe_span = Some(defn.span);
+            maybe_stmt = Some(ParsedStatement::VariableDefinition(defn));
+        }
+
+        // TODO: Check for other types of statements
+
+        // We now still expect a semicolon
+        if maybe_span.is_none() {
+            maybe_span = Some(start_span);
+        }
+
+        if maybe_stmt.is_none() {
+            return None;
+        }
+
+        if !matches!(self.token(), Some(Semicolon(_))) {
+            self.errors.push(ParserError::WithHint(
+                "Statement misses semicolon".into(),
+                maybe_span.unwrap(),
+                "Add a semicolon at the end of the statement.".into(),
+                maybe_span.unwrap().after(),
+            ));
+
+            maybe_stmt = None;
+        } else {
+            self.inc();
+        }
+
+        maybe_stmt
+    }
+
+    fn parse_variable_definition(&mut self) -> Option<ParsedVariableDefinition<'src>> {
+        use Token::*;
+
+        // 1. `let` keyword
+        if !matches!(self.token(), Some(Let(_))) {
+            return None;
+        }
+
+        let mut success = true;
+        let mut total_span = self.token().unwrap().span();
+
+        let let_span = self.token().unwrap().span();
+
+        if !self.expect_inc() {
+            return None;
+        }
+
+        // 2. `mut` keyword?
+        let (mutability, mutable_span) = if let Some(&Mut(span)) = self.token() {
+
+            if !self.expect_inc() {
+                return None;
+            }
+
+            total_span = total_span.merge(span);
+
+            (Mutability::Mutable, Some(span))
+        } else {
+            (Mutability::Immutable, None)
+        };
+
+        // 3. Identifier
+        let (var_name, var_name_span) = if let Some(&Identifier(name, span)) = self.token() {
+            total_span = total_span.merge(span);
+
+            (Some(name), Some(span))
+        } else {
+            // At this point we do not want to return None, since we already had a `let` keyword.
+            // So this clearly is a variable assignment, if an incorrect one.
+            success = false;
+            (None, None)
+        };
+
+        if !self.expect_inc() {
+            return None;
+        }
+
+        // TODO: 4. Type hint?
+
+        // 5. Assignment equal sign
+        if !matches!(self.token(), Some(Equals(_))) {
+            self.errors.push(ParserError::WithHint(
+                "Variable definition requires assignment!".into(),
+                total_span,
+                format!(
+                    "Add a value assignment `let {}{} = value;`.",
+                    if mutable_span.is_some() { "mut " } else { "" },
+                    if var_name.is_some() { var_name.unwrap() } else { "foo" },
+                ),
+                total_span.after(),
+            ));
+
+            success = false;
+        } else {
+            self.inc();
+        }
+
+        // 6. Assignment value expression
+        let value_expression = self.parse_expression();
+        success &= value_expression.is_some();
+
+        if success {
+            Some(ParsedVariableDefinition{
+                name: var_name.unwrap(),
+                name_span: var_name_span.unwrap(),
+                type_name: None,
+                type_span: None,
+                mutability,
+                mutability_span: mutable_span,
+                initial_value: value_expression.unwrap(),
+                span: total_span,
+            })
+        } else {
+            None
+        }
+    }
+
+    fn parse_expression(&mut self) -> Option<ParsedExpression> {
+        if !self.has_token() {
+            return None;
+        }
+
+        // TODO: implement correctly
+        use Token::*;
+        if let Some(&NumberLiteral(_, span)) = self.token() {
+            self.inc();
+
+            Some(ParsedExpression::Junk(span))
+        } else {
+            None
+        }
     }
 }
