@@ -6,7 +6,7 @@ use crate::{Span, Error};
 pub enum Token<'a> {
     Unknown(Span),
     Identifier(&'a str, Span),
-    NumberLiteral(Vec<u8>, Span),
+    NumberLiteral(u128, Span),
     StringLiteral(&'a str, Span),
 
     // keywords
@@ -262,23 +262,58 @@ impl<'a> Lexer<'a> {
 
         if self.char().is_numeric() {
             // We have a number
-
-            // TODO: add support for binary and hex digits
-
-            let mut digits = vec![self.char().to_digit(10).unwrap() as u8];
-            self.inc_index();
-
-            while self.char().is_numeric() {
-                digits.push(self.char().to_digit(10).unwrap() as u8);
-
-                self.inc_index();
-            }
-
-            return Token::NumberLiteral(digits, self.span());
+            return self.lex_number();
         }
 
         // we have a keyword or an identifier
         self.lex_keyword_or_identifier()
+    }
+
+    fn lex_number(&mut self) -> Token<'a> {
+        // TODO: add support for binary and hex digits
+
+        let start_span = self.span();
+
+        let mut value: u128 = 0;
+
+        while self.char().is_numeric() || self.char() == '_' {
+
+            if self.char() == '_' {
+                self.inc_index();
+                continue;
+            }
+
+            let literal = self.char().to_digit(10).unwrap() as u128;
+
+            if let Some(value_times_10) = value.checked_mul(10) {
+                value = value_times_10;
+            } else {
+                let span = start_span.merge(self.span());
+                self.errors.push(Error::WithHint(
+                    "Integer literal overflow.".into(),
+                    span,
+                    "Integer literals must currently fit within a 128 bit unsigned integer type.".into(),
+                    span
+                ));
+            }
+
+            if let Some(plus_digit) = value.checked_add(literal) {
+                value = plus_digit;
+            } else {
+                let span = start_span.merge(self.span());
+                self.errors.push(Error::WithHint(
+                    "Integer literal overflow.".into(),
+                    span,
+                    "Integer literals must currently fit within a 128 bit unsigned integer type.".into(),
+                    span
+                ));
+            }
+
+            self.inc_index();
+        }
+
+        let span = start_span.merge(self.span_excl());
+        return Token::NumberLiteral(value, span);
     }
 
     fn lex_keyword_or_identifier(&mut self) -> Token<'a> {
