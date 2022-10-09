@@ -152,6 +152,7 @@ pub enum ParsedExpressionAtom<'src> {
     BooleanConstant(bool, Span),
     EnclosedExpression(ExpressionId, Span),
     UnaryPrefixedAtom(ParsedOperator, ExpressionAtomId, Span),
+    Variable(&'src str, Span),
 }
 
 impl<'src> ParsedExpressionAtom<'src> {
@@ -162,7 +163,8 @@ impl<'src> ParsedExpressionAtom<'src> {
             IntegerConstant(_, span) |
             BooleanConstant(_, span) |
             EnclosedExpression(_, span) |
-            UnaryPrefixedAtom(_, _, span) => *span,
+            UnaryPrefixedAtom(_, _, span) |
+            Variable(_, span) => *span,
         }
     }
 
@@ -174,6 +176,7 @@ impl<'src> ParsedExpressionAtom<'src> {
             BooleanConstant(val, _) => format!("{}", val),
             EnclosedExpression(expr, _) => format!("({})", parser.expressions[expr.0].to_string(parser)),
             UnaryPrefixedAtom(op, atom, _) => format!("({}{})", op.to_string(), parser.expression_atoms[atom.0].to_string(parser)),
+            &Variable(identifier, _) => String::from(identifier),
         }
     }
 }
@@ -882,7 +885,16 @@ impl<'src> Parser<'src> {
                 self.expression_atoms.push(BooleanConstant(value, span));
 
                 Some(self.current_expr_atom())
-            }
+            },
+            Identifier(name, span) => {
+                self.inc();
+
+                // TODO: Check if followed by `()`, because then it should be a function invocation.
+
+                self.expression_atoms.push(Variable(name, span));
+
+                Some(self.current_expr_atom())
+            },
             LParen(mut span) => {
                 if !self.expect_inc() {
                     return None;
