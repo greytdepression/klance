@@ -138,9 +138,9 @@ impl ParsedExpression {
     fn to_string<'a>(&self, parser: &Parser<'a>) -> String {
         match self {
             ParsedExpression::Junk(_) => "Junk".into(),
-            ParsedExpression::Atom(atom, _) => parser.expression_atoms[atom.0].to_string(parser),
+            ParsedExpression::Atom(atom, _) => parser.get_atom(*atom).to_string(parser),
             ParsedExpression::BinaryOperation(lhs, op, rhs, _)
-                => format!("({} {} {})", parser.expressions[lhs.0].to_string(parser), op.to_string(), parser.expressions[rhs.0].to_string(parser)),
+                => format!("({} {} {})", parser.get_expr(*lhs).to_string(parser), op.to_string(), parser.get_expr(*rhs).to_string(parser)),
         }
     }
 }
@@ -174,8 +174,8 @@ impl<'src> ParsedExpressionAtom<'src> {
             Unit(_) => "()".into(),
             IntegerConstant(val, _) => format!("{}", val),
             BooleanConstant(val, _) => format!("{}", val),
-            EnclosedExpression(expr, _) => format!("({})", parser.expressions[expr.0].to_string(parser)),
-            UnaryPrefixedAtom(op, atom, _) => format!("({}{})", op.to_string(), parser.expression_atoms[atom.0].to_string(parser)),
+            EnclosedExpression(expr, _) => format!("({})", parser.get_expr(*expr).to_string(parser)),
+            UnaryPrefixedAtom(op, atom, _) => format!("({}{})", op.to_string(), parser.get_atom(*atom).to_string(parser)),
             &Variable(identifier, _) => String::from(identifier),
         }
     }
@@ -371,6 +371,14 @@ impl<'src> Parser<'src> {
 
     fn current_expr_atom(&self) -> ExpressionAtomId {
         ExpressionAtomId(self.expression_atoms.len() - 1)
+    }
+
+    fn get_expr(&self, id: ExpressionId) -> &ParsedExpression {
+        &self.expressions[id.0]
+    }
+
+    fn get_atom(&self, id: ExpressionAtomId) -> &ParsedExpressionAtom {
+        &self.expression_atoms[id.0]
     }
 
     fn expr_span(&self, id: ExpressionId) -> Span {
@@ -789,7 +797,7 @@ impl<'src> Parser<'src> {
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                let atom = parser.expression_atoms[id.0].clone();
+                let atom = parser.get_atom(id).clone();
 
                 return atom.to_string(parser);
             }
@@ -822,7 +830,7 @@ impl<'src> Parser<'src> {
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                let span = parser.expression_atoms[id.0].span();
+                let span = parser.get_atom(id).span();
 
                 parser.expressions.push(ParsedExpression::Atom(id, span));
 
@@ -843,8 +851,8 @@ impl<'src> Parser<'src> {
             let lhs = build_expression_tree(parser, tree, lhs);
             let rhs = build_expression_tree(parser, tree, rhs);
 
-            let lhs_span = parser.expressions[lhs.0].span();
-            let rhs_span = parser.expressions[rhs.0].span();
+            let lhs_span = parser.expr_span(lhs);
+            let rhs_span = parser.expr_span(rhs);
 
             let span = lhs_span.merge(rhs_span);
 
