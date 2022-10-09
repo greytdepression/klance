@@ -20,7 +20,7 @@ pub struct ParsedField<'src> {
     name_span: Span,
     type_name: &'src str,
     type_span: Span,
-    default_value: Option<ParsedExpression>,
+    default_value: Option<ExpressionId>,
     default_value_span: Option<Span>,
     visibility: Visibility,
     visibility_span: Span,
@@ -62,7 +62,7 @@ pub struct ParsedParameter<'src> {
     name_span: Span,
     type_name: &'src str,
     type_span: Span,
-    default_value: Option<ParsedExpression>,
+    default_value: Option<ExpressionId>,
     default_value_span: Option<Span>,
     anonymity: Anonymity,
     anonymity_span: Span,
@@ -89,7 +89,7 @@ pub struct ParsedCodeBlock<'src> {
 
 #[derive(Debug, Clone)]
 pub enum ParsedStatement<'src> {
-    Expression(ParsedExpression, HasSemicolon),
+    Expression(ExpressionId, HasSemicolon),
     VariableDefinition(ParsedVariableDefinition<'src>),
     ConstantDefinition(ParsedConstantDefinition<'src>),
 }
@@ -108,7 +108,7 @@ pub struct ParsedVariableDefinition<'src> {
     type_span: Option<Span>,
     mutability: Mutability,
     mutability_span: Option<Span>,
-    initial_value: ParsedExpression,
+    initial_value: ExpressionId,
     span: Span,
 }
 
@@ -121,8 +121,8 @@ pub enum Mutability {
 #[derive(Debug, Clone)]
 pub enum ParsedExpression {
     Junk(Span),
-    Atom(ParsedExpressionAtom, Span),
-    BinaryOperation(Box<ParsedExpression>, ParsedOperator, Box<ParsedExpression>, Span),
+    Atom(ExpressionAtomId, Span),
+    BinaryOperation(ExpressionId, ParsedOperator, ExpressionId, Span),
 }
 
 impl ParsedExpression {
@@ -134,29 +134,27 @@ impl ParsedExpression {
             BinaryOperation(_, _, _, span) => *span,
         }
     }
-}
 
-impl ToString for ParsedExpression {
-    fn to_string(&self) -> String {
+    fn to_string<'a>(&self, parser: &Parser<'a>) -> String {
         match self {
             ParsedExpression::Junk(_) => "Junk".into(),
-            ParsedExpression::Atom(atom, _) => atom.to_string(),
+            ParsedExpression::Atom(atom, _) => parser.expression_atoms[atom.0].to_string(parser),
             ParsedExpression::BinaryOperation(lhs, op, rhs, _)
-                => format!("({} {} {})", lhs.to_string(), op.to_string(), rhs.to_string()),
+                => format!("({} {} {})", parser.expressions[lhs.0].to_string(parser), op.to_string(), parser.expressions[rhs.0].to_string(parser)),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum ParsedExpressionAtom {
+pub enum ParsedExpressionAtom<'src> {
     Unit(Span),
     IntegerConstant(u128, Span),
     BooleanConstant(bool, Span),
-    EnclosedExpression(Box<ParsedExpression>, Span),
-    UnaryPrefixedAtom(ParsedOperator, Box<ParsedExpressionAtom>, Span),
+    EnclosedExpression(ExpressionId, Span),
+    UnaryPrefixedAtom(ParsedOperator, ExpressionAtomId, Span),
 }
 
-impl ParsedExpressionAtom {
+impl<'src> ParsedExpressionAtom<'src> {
     pub fn span(&self) -> Span {
         use ParsedExpressionAtom::*;
         match self {
@@ -167,16 +165,15 @@ impl ParsedExpressionAtom {
             UnaryPrefixedAtom(_, _, span) => *span,
         }
     }
-}
 
-impl ToString for ParsedExpressionAtom {
-    fn to_string(&self) -> String {
+    fn to_string<'a>(&self, parser: &Parser<'a>) -> String {
+        use ParsedExpressionAtom::*;
         match self {
-            ParsedExpressionAtom::Unit(_) => "()".into(),
-            ParsedExpressionAtom::IntegerConstant(val, _) => format!("{}", val),
-            ParsedExpressionAtom::BooleanConstant(val, _) => format!("{}", val),
-            ParsedExpressionAtom::EnclosedExpression(expr, _) => format!("({})", expr.to_string()),
-            ParsedExpressionAtom::UnaryPrefixedAtom(op, expr, _) => format!("({}{})", op.to_string(), expr.to_string()),
+            Unit(_) => "()".into(),
+            IntegerConstant(val, _) => format!("{}", val),
+            BooleanConstant(val, _) => format!("{}", val),
+            EnclosedExpression(expr, _) => format!("({})", parser.expressions[expr.0].to_string(parser)),
+            UnaryPrefixedAtom(op, atom, _) => format!("({}{})", op.to_string(), parser.expression_atoms[atom.0].to_string(parser)),
         }
     }
 }
@@ -301,7 +298,17 @@ pub struct Parser<'src> {
     tokens: Vec<Token<'src>>,
     token_index: usize,
     errors: Vec<Error>,
+
+    // data
+    expressions: Vec<ParsedExpression>,
+    expression_atoms: Vec<ParsedExpressionAtom<'src>>,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExpressionId(usize);
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExpressionAtomId(usize);
 
 impl<'src> Parser<'src> {
     pub fn new(tokens: Vec<Token<'src>>) -> Parser<'src> {
@@ -309,6 +316,8 @@ impl<'src> Parser<'src> {
             tokens,
             token_index: 0,
             errors: vec![],
+            expressions: vec![],
+            expression_atoms: vec![],
         }
     }
 
@@ -351,6 +360,22 @@ impl<'src> Parser<'src> {
         } else {
             Span::default()
         }
+    }
+
+    fn current_expr(&self) -> ExpressionId {
+        ExpressionId(self.expressions.len() - 1)
+    }
+
+    fn current_expr_atom(&self) -> ExpressionAtomId {
+        ExpressionAtomId(self.expression_atoms.len() - 1)
+    }
+
+    fn expr_span(&self, id: ExpressionId) -> Span {
+        self.expressions[id.0].span()
+    }
+
+    fn atom_span(&self, id: ExpressionAtomId) -> Span {
+        self.expression_atoms[id.0].span()
     }
 
     // We are always going to make the parse function return options, but the
@@ -679,21 +704,20 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_expression(&mut self) -> Option<ParsedExpression> {
+    fn parse_expression(&mut self) -> Option<ExpressionId> {
         let mut span = self.span();
 
         if !self.has_token() {
             return None;
         }
 
-        let mut atoms: Vec<ParsedExpressionAtom> = vec![];
-        let mut operators: Vec<ParsedOperator> = vec![];
+        let len_atoms_initial = self.expression_atoms.len();
 
         let mut tree: BinaryTree<ExpressionTreeData, _> = BinaryTree::new(|lhs, rhs| {
             use ExpressionTreeData::*;
             match (lhs, rhs) {
                 (Atom(_), _) | (_, Atom(_)) => Ordering::Equal,
-                (ExpressionTreeData::BinOp(_, lhs), ExpressionTreeData::BinOp(_, rhs)) => lhs.cmp(&rhs),
+                (ExpressionTreeData::BinOp(lhs), ExpressionTreeData::BinOp(rhs)) => lhs.cmp(&rhs),
             }
         });
 
@@ -705,12 +729,9 @@ impl<'src> Parser<'src> {
             return None;
         };
 
-        span = span.merge(lhs_atom.span());
+        span = span.merge(self.atom_span(lhs_atom));
 
-        atoms.push(lhs_atom);
-        let atom_id = atoms.len() - 1; // is equal to 0
-
-        let lhs_data = ExpressionTreeData::Atom(atom_id);
+        let lhs_data = ExpressionTreeData::Atom(lhs_atom);
         _ = tree.insert_root(lhs_data, Side::Left, None);
 
         loop {
@@ -723,9 +744,6 @@ impl<'src> Parser<'src> {
 
             let op = op.unwrap();
 
-            operators.push(op);
-            let op_id = operators.len() - 1;
-
             // RHS atom
             let rhs_atom = self.parse_expression_atom();
 
@@ -737,18 +755,18 @@ impl<'src> Parser<'src> {
                     op.span(),
                 ));
 
+                // drop the newly added atoms
+                self.expression_atoms.truncate(len_atoms_initial);
+
                 return None;
             }
 
             let rhs_atom = rhs_atom.unwrap();
 
-            atoms.push(rhs_atom);
-            let rhs_atom_id = atoms.len() - 1;
-
             // Add data to tree
 
-            let op_data = ExpressionTreeData::BinOp(op_id, op);
-            let rhs_atom_data = ExpressionTreeData::Atom(rhs_atom_id);
+            let op_data = ExpressionTreeData::BinOp(op);
+            let rhs_atom_data = ExpressionTreeData::Atom(rhs_atom);
 
             _ = tree.insert_root(
                 op_data,
@@ -757,9 +775,9 @@ impl<'src> Parser<'src> {
             );
         }
 
-        fn print_tree<F>(
+        fn print_tree<'a, F>(
+            parser: &Parser<'a>,
             tree: &BinaryTree<ExpressionTreeData, F>,
-            atoms: &Vec<ParsedExpressionAtom>,
             start_index: usize
         ) -> String
             where F: Fn(ExpressionTreeData, ExpressionTreeData) -> Ordering
@@ -768,14 +786,14 @@ impl<'src> Parser<'src> {
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                let atom = atoms[id].clone();
+                let atom = parser.expression_atoms[id.0].clone();
 
-                return atom.to_string();
+                return atom.to_string(parser);
             }
 
-            assert!(matches!(node.data(), &BinOp(_, _)));
+            assert!(matches!(node.data(), &BinOp(_)));
 
-            let op = if let &BinOp(_, op) = node.data() {
+            let op = if let &BinOp(op) = node.data() {
                 op
             } else {
                 panic!("unreachable code (Parser::parse_expression()::build_expression_tree()): node.data() not BinOp");
@@ -784,33 +802,33 @@ impl<'src> Parser<'src> {
             let lhs = tree.get_node(start_index).lhs().expect("Binary operator node does not have an lhs!");
             let rhs = tree.get_node(start_index).rhs().expect("Binary operator node does not have an rhs!");
 
-            let lhs = print_tree(tree, atoms, lhs);
-            let rhs = print_tree(tree, atoms, rhs);
+            let lhs = print_tree(parser, tree, lhs);
+            let rhs = print_tree(parser, tree, rhs);
 
             format!("({} {} {})", lhs, op.to_string(), rhs)
         }
 
-        fn build_expression_tree<F>(
+        fn build_expression_tree<'a, F>(
+            parser: &mut Parser<'a>,
             tree: &BinaryTree<ExpressionTreeData, F>,
-            atoms: &Vec<ParsedExpressionAtom>,
             start_index: usize
-        ) -> ParsedExpression
+        ) -> ExpressionId
             where F: Fn(ExpressionTreeData, ExpressionTreeData) -> Ordering
         {
             use ExpressionTreeData::*;
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                let atom = atoms[id].clone();
+                let span = parser.expression_atoms[id.0].span();
 
-                let span = atom.span();
+                parser.expressions.push(ParsedExpression::Atom(id, span));
 
-                return ParsedExpression::Atom(atom, span);
+                return parser.current_expr();
             }
 
-            assert!(matches!(node.data(), &BinOp(_, _)));
+            assert!(matches!(node.data(), &BinOp(_)));
 
-            let op = if let &BinOp(_, op) = node.data() {
+            let op = if let &BinOp(op) = node.data() {
                 op
             } else {
                 panic!("unreachable code (Parser::parse_expression()::build_expression_tree()): node.data() not BinOp");
@@ -819,25 +837,30 @@ impl<'src> Parser<'src> {
             let lhs = tree.get_node(start_index).lhs().expect("Binary operator node does not have an lhs!");
             let rhs = tree.get_node(start_index).rhs().expect("Binary operator node does not have an rhs!");
 
-            let lhs = build_expression_tree(tree, atoms, lhs);
-            let rhs = build_expression_tree(tree, atoms, rhs);
+            let lhs = build_expression_tree(parser, tree, lhs);
+            let rhs = build_expression_tree(parser, tree, rhs);
 
-            let span = lhs.span().merge(rhs.span());
+            let lhs_span = parser.expressions[lhs.0].span();
+            let rhs_span = parser.expressions[rhs.0].span();
 
-            ParsedExpression::BinaryOperation(
-                Box::new(lhs),
+            let span = lhs_span.merge(rhs_span);
+
+            parser.expressions.push(ParsedExpression::BinaryOperation(
+                lhs,
                 op,
-                Box::new(rhs),
+                rhs,
                 span,
-            )
+            ));
+
+            parser.current_expr()
         }
 
-        Some(build_expression_tree(&tree, &atoms, tree.root()))
+        Some(build_expression_tree(self, &tree, tree.root()))
     }
 
 
 
-    fn parse_expression_atom(&mut self) -> Option<ParsedExpressionAtom> {
+    fn parse_expression_atom(&mut self) -> Option<ExpressionAtomId> {
         if !self.has_token() {
             return None;
         }
@@ -849,12 +872,16 @@ impl<'src> Parser<'src> {
             NumberLiteral(value, span) => {
                 self.inc();
 
-                Some(IntegerConstant(value, span))
+                self.expression_atoms.push(IntegerConstant(value, span));
+
+                Some(self.current_expr_atom())
             },
             BooleanLiteral(value, span) => {
                 self.inc();
 
-                Some(BooleanConstant(value, span))
+                self.expression_atoms.push(BooleanConstant(value, span));
+
+                Some(self.current_expr_atom())
             }
             LParen(mut span) => {
                 if !self.expect_inc() {
@@ -872,10 +899,12 @@ impl<'src> Parser<'src> {
                 self.inc();
 
                 if expr.is_some() {
-                    Some(EnclosedExpression(Box::new(expr.unwrap()), span))
+                    self.expression_atoms.push(EnclosedExpression(expr.unwrap(), span));
                 } else {
-                    Some(Unit(span))
+                    self.expression_atoms.push(Unit(span));
                 }
+
+                Some(self.current_expr_atom())
             },
             // TODO: Precedence considering prefix and suffix operators
             _ if let Some(op) = self.parse_unary_prefix_operator() => {
@@ -895,9 +924,11 @@ impl<'src> Parser<'src> {
 
                 let atom = atom.unwrap();
 
-                let span = op.span().merge(atom.span());
+                let span = op.span().merge(self.atom_span(atom));
 
-                Some(UnaryPrefixedAtom(op, Box::new(atom), span))
+                self.expression_atoms.push(UnaryPrefixedAtom(op, atom, span));
+
+                Some(self.current_expr_atom())
             },
             _ => None,
         }
@@ -961,6 +992,6 @@ impl<'src> Parser<'src> {
 
 #[derive(Debug, Clone, Copy)]
 enum ExpressionTreeData {
-    Atom(usize),
-    BinOp(usize, ParsedOperator),
+    Atom(ExpressionAtomId),
+    BinOp(ParsedOperator),
 }
