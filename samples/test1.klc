@@ -1,8 +1,12 @@
 
 
 fn main() {
+    if false {}
+
     let a = -(184_903) * 5 + 32 * 7;
     let mut b = ();
     let boolean_value = false;
     let c = true and boolean_value xor not true;
+
+    if c {} else if false {} else {}
 }

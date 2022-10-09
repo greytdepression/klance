@@ -90,15 +90,32 @@ pub struct ParsedCodeBlock<'src> {
 
 #[derive(Debug, Clone)]
 pub enum ParsedStatement<'src> {
+    NoOp(Span),
     Expression(ExpressionId, HasSemicolon),
     VariableDefinition(ParsedVariableDefinition<'src>),
     ConstantDefinition(ParsedConstantDefinition<'src>),
+    IfStatement(ParsedIfStatement<'src>),
+    Block(ParsedCodeBlock<'src>)
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum HasSemicolon {
     Yes,
     No,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParsedIfStatement<'src> {
+    condition: ExpressionId,
+    then_block: ParsedCodeBlock<'src>,
+    else_statment: Option<ParsedElseStatement<'src>>,
+    span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ParsedElseStatement<'src> {
+    Unconditional(ParsedCodeBlock<'src>, Span),
+    Conditional(Box<ParsedIfStatement<'src>>, Span),
 }
 
 #[derive(Debug, Clone)]
@@ -404,12 +421,16 @@ impl<'src> Parser<'src> {
             Span::default()
         };
 
-        while self.has_token() {
+        let mut success = true;
+
+        while self.has_token() && success {
 
 
             // try parse a function
             if let Some(func) = self.parse_function() {
                 functions.push(func);
+            } else {
+                success = false;
             }
         }
 
@@ -555,24 +576,27 @@ impl<'src> Parser<'src> {
         use Token::*;
 
         // 1. Open brace
-        if let LBrace(_) = self.token().unwrap() {
+        if matches!(self.token(), Some(LBrace(_))) {
             if !self.expect_inc() {
                 return None;
             }
+        } else {
+            return None;
         }
 
         // TODO: 2. Code ig
+        let mut found_statement = true;
         let mut statements = vec![];
-        while !matches!(self.token(), Some(RBrace(_))) {
+        while found_statement && !matches!(self.token(), Some(RBrace(_))) {
             if let Some(stmt) = self.parse_statement() {
                 statements.push(stmt);
             } else {
-                break;
+                found_statement = false;
             }
         }
 
         // 3. Closing brace
-        if let RBrace(_) = self.token().unwrap() {
+        if matches!(self.token(), Some(RBrace(_))) {
             self.inc();
 
             return Some(ParsedCodeBlock {
@@ -595,10 +619,42 @@ impl<'src> Parser<'src> {
         let start_span = self.token().unwrap().span();
         let mut maybe_span = None;
 
-        // Check if there is a variable definition
-        if let Some(defn) = self.parse_variable_definition() {
+        let mut needs_semicolon = true;
+
+        // 0. Check if there is a lonely semicolon
+        if matches!(self.token(), Some(Semicolon(_))) {
+            maybe_span = Some(self.token().unwrap().span());
+            maybe_stmt = Some(ParsedStatement::NoOp(self.token().unwrap().span()));
+
+            // FIXME: Emit warning about this semicolon
+
+            self.inc();
+
+            needs_semicolon = false;
+        }
+
+        // 1. Check if there is a variable definition
+        else if let Some(defn) = self.parse_variable_definition() {
             maybe_span = Some(defn.span);
             maybe_stmt = Some(ParsedStatement::VariableDefinition(defn));
+
+            needs_semicolon = true;
+        }
+
+        // 2. Check if there is an if statement
+        else if let Some(if_stmt) = self.parse_if_statement() {
+            maybe_span = Some(if_stmt.span);
+            maybe_stmt = Some(ParsedStatement::IfStatement(if_stmt));
+
+            needs_semicolon = false;
+        }
+
+        // 3. Check if there is a code block
+        else if let Some(block) = self.parse_code_block() {
+            maybe_span = Some(block.span);
+            maybe_stmt = Some(ParsedStatement::Block(block));
+
+            needs_semicolon = false;
         }
 
         // TODO: Check for other types of statements
@@ -612,23 +668,122 @@ impl<'src> Parser<'src> {
             return None;
         }
 
-        if !matches!(self.token(), Some(Semicolon(_))) {
-            self.errors.push(Error::WithHint(
-                "Statement misses semicolon".into(),
-                maybe_span.unwrap(),
-                "Add a semicolon at the end of the statement.".into(),
-                maybe_span.unwrap().after(),
-            ));
+        if needs_semicolon {
+            if !matches!(self.token(), Some(Semicolon(_))) {
+                self.errors.push(Error::WithHint(
+                    "Statement misses semicolon".into(),
+                    maybe_span.unwrap(),
+                    "Add a semicolon at the end of the statement.".into(),
+                    maybe_span.unwrap().after(),
+                ));
 
-            maybe_stmt = None;
-        } else {
-            self.inc();
+                return None;
+            } else {
+                self.inc();
+            }
         }
 
         maybe_stmt
     }
 
+    fn parse_if_statement(&mut self) -> Option<ParsedIfStatement<'src>> {
+        if !self.has_token() {
+            return None;
+        }
+
+        use Token::*;
+
+        // 1. `if` keyword
+        if !matches!(self.token().unwrap(), If(_)) {
+            return None;
+        }
+
+        let mut total_span = self.span();
+
+        if !self.expect_inc() {
+            return None;
+        }
+
+        // 2. Condition expression
+        let cond = self.parse_expression();
+
+        if cond.is_none() {
+            self.errors.push(Error::WithHint(
+                "If statement lacks condition expression.".into(),
+                total_span,
+                "Expected boolean expression here.".into(),
+                total_span.after(),
+            ));
+
+            return None;
+        }
+
+        let cond = cond.unwrap();
+
+        total_span.merge_into(self.expr_span(cond));
+
+        // 3. Code block
+        let block = self.parse_code_block();
+
+        if block.is_none() {
+            self.errors.push(Error::WithHint(
+                "If statement lacks then block.".into(),
+                total_span,
+                "If statements need to be of the form `if condition { ... }`".into(),
+                total_span.after(),
+            ));
+
+            return None;
+        }
+
+        let block = block.unwrap();
+
+        total_span.merge_into(block.span);
+
+        // 4. Else block?
+        let else_stmt = if matches!(self.token(), Some(Else(_))) {
+            let else_span = self.token().unwrap().span();
+            self.inc();
+
+            let if_stmt = self.parse_if_statement();
+
+            if if_stmt.is_some() {
+                Some(ParsedElseStatement::Conditional(Box::new(if_stmt.unwrap()), else_span))
+            } else {
+                let code_block = self.parse_code_block();
+
+                if code_block.is_none() {
+                    self.errors.push(Error::WithHint(
+                        "Else statement lacks then block.".into(),
+                        else_span,
+                        "Expected code block or another if statement here.".into(),
+                        else_span.after(),
+                    ));
+
+                    return None;
+                }
+
+                let code_block = code_block.unwrap();
+
+                Some(ParsedElseStatement::Unconditional(code_block, else_span))
+            }
+        } else {
+            None
+        };
+
+        Some(ParsedIfStatement {
+            condition: cond,
+            then_block: block,
+            else_statment: else_stmt,
+            span: total_span,
+        })
+    }
+
     fn parse_variable_definition(&mut self) -> Option<ParsedVariableDefinition<'src>> {
+        if !self.has_token() {
+            return None;
+        }
+
         use Token::*;
 
         // 1. `let` keyword

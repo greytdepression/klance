@@ -45,6 +45,10 @@ impl Span {
         }
     }
 
+    pub fn merge_into(&mut self, other: Span) {
+        *self = self.merge(other);
+    }
+
     pub fn after(&self) -> Span {
         Span {
             start: self.end,
