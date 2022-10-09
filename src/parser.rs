@@ -119,31 +119,35 @@ pub enum ParsedExpression {
     Junk(Span),
     Atom(ParsedExpressionAtom, Span),
     BinaryOperation(Box<ParsedExpression>, ParsedOperator, Box<ParsedExpression>, Span),
-    UnaryPrefixOperation(ParsedOperator, Box<ParsedExpression>, Span),
-    AccessOperation(Box<ParsedExpression>, Box<ParsedExpression>, Span),
 }
 
 impl ParsedExpression {
     pub fn span(&self) -> Span {
+        use ParsedExpression::*;
         match self {
-            ParsedExpression::Junk(span) |
-            ParsedExpression::Atom(_, span) |
-            ParsedExpression::BinaryOperation(_, _, _, span) |
-            ParsedExpression::UnaryPrefixOperation(_, _, span) |
-            ParsedExpression::AccessOperation(_, _, span) => *span,
+            Junk(span) |
+            Atom(_, span) |
+            BinaryOperation(_, _, _, span) => *span,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpressionAtom {
+    Unit(Span),
     IntegerConstant(u128, Span),
+    EnclosedExpression(Box<ParsedExpression>, Span),
+    UnaryPrefixedAtom(ParsedOperator, Box<ParsedExpressionAtom>, Span),
 }
 
 impl ParsedExpressionAtom {
     pub fn span(&self) -> Span {
+        use ParsedExpressionAtom::*;
         match self {
-            ParsedExpressionAtom::IntegerConstant(_, span) => *span,
+            Unit(span) |
+            IntegerConstant(_, span) |
+            EnclosedExpression(_, span) |
+            UnaryPrefixedAtom(_, _, span) => *span,
         }
     }
 }
@@ -157,12 +161,13 @@ pub enum ParsedOperator {
 }
 
 impl ParsedOperator {
-    pub fn precedence(&self) -> i32 {
+    pub fn span(&self) -> Span {
+        use ParsedOperator::*;
         match self {
-            ParsedOperator::Plus(_) => 0,
-            ParsedOperator::Minus(_) => 0,
-            ParsedOperator::Asterisk(_) => 10,
-            ParsedOperator::Slash(_) => 11,
+            Plus(span) |
+            Minus(span) |
+            Asterisk(span) |
+            Slash(span) => *span,
         }
     }
 }
@@ -562,10 +567,7 @@ impl<'src> Parser<'src> {
     fn parse_expression(&mut self) -> Option<ParsedExpression> {
         use Token::*;
 
-        let mut last_precedence = 10000;
-
-        let mut expressions: Vec<ParsedExpression> = vec![];
-        let mut operators: Vec<ParsedOperator> = vec![];
+        let mut top_expression: Option<ParsedExpression> = None;
 
         let mut span = self.span();
 
@@ -574,45 +576,37 @@ impl<'src> Parser<'src> {
                 return None;
             }
 
-            if matches!(self.token(), Some(LParen(_))) {
-                self.inc();
+            let mut partial_expr: Option<ParsedExpression> = None;
 
-                let mut paren_span = self.span();
-
-                if let Some(expr) = self.parse_expression() {
-                    span = span.merge(expr.span());
-                    paren_span = paren_span.merge(expr.span());
-                    expressions.push(expr);
-                }
-
-                if !matches!(self.token(), Some(RParen(_))) {
-
-                    // FIXME: Figure out if it is always safe to throw this error of if it might occur in
-                    //        unwatned situations.
-                    self.errors.push(Error::WithHint(
-                        "Open paranthesis needs a closing partner.".into(),
-                        paren_span,
-                        "Expected closing `)` at this point. (This error might show up unwanted??)".into(),
-                        paren_span.after(),
-                    ));
-                } else {
-                    self.inc();
-                }
-            }
-
+            // Next expression atom
             if let Some(atom) = self.parse_expression_atom() {
-                let span = atom.span();
+                let atom_span = atom.span();
 
-                expressions.push(ParsedExpression::Atom(atom, span));
+                span = span.merge(atom_span);
+
+                partial_expr = Some(ParsedExpression::Atom(atom, atom_span));
             }
 
-            // TODO: Operators
+            if partial_expr.is_none() {
+                break;
+            }
 
-            // TODO: break conditions
+            // TODO: Suffix operators
+
+            // TODO: Binary operators
+
+            // Note: This should probably work by parsing 1 atom, a binary operation, and then recursively parsing an expression.
+            //       After that we can perform precedence checks and reorder if necessary.
+
+            top_expression = Some(partial_expr.unwrap());
+
+            // TODO: loop
+
+            break;
 
         }
 
-        None
+        top_expression
     }
 
     fn parse_expression_atom(&mut self) -> Option<ParsedExpressionAtom> {
@@ -621,11 +615,56 @@ impl<'src> Parser<'src> {
         }
 
         use Token::*;
-        match self.token().unwrap() {
-            &NumberLiteral(value, span) => {
+        use ParsedExpressionAtom::*;
+        let tk = *self.token().unwrap();
+        match tk {
+            NumberLiteral(value, span) => {
                 self.inc();
 
-                Some(ParsedExpressionAtom::IntegerConstant(value, span))
+                Some(IntegerConstant(value, span))
+            },
+            LParen(mut span) => {
+                if !self.expect_inc() {
+                    return None;
+                }
+
+                let expr = self.parse_expression();
+
+                if !matches!(self.token(), Some(RParen(_))) {
+                    return None;
+                }
+
+                span = span.merge(self.span());
+
+                self.inc();
+
+                if expr.is_some() {
+                    Some(EnclosedExpression(Box::new(expr.unwrap()), span))
+                } else {
+                    Some(Unit(span))
+                }
+            },
+            // TODO: Precedence considering prefix and suffix operators
+            _ if let Some(op) = self.parse_unary_prefix_operator() => {
+                let atom = self.parse_expression_atom();
+
+                if atom.is_none() {
+
+                    self.errors.push(Error::WithHint(
+                        "Unary operator lacks expression atom to act upon.".into(),
+                        op.span(),
+                        "Expected an expression atom here.".into(),
+                        op.span().after(),
+                    ));
+
+                    return None;
+                }
+
+                let atom = atom.unwrap();
+
+                let span = op.span().merge(atom.span());
+
+                Some(UnaryPrefixedAtom(op, Box::new(atom), span))
             },
             _ => None,
         }
@@ -638,11 +677,17 @@ impl<'src> Parser<'src> {
 
         use Token::*;
 
-        match self.token().unwrap() {
+        let op = match self.token().unwrap() {
             &Plus(span) => Some(ParsedOperator::Plus(span)),
             &Minus(span) => Some(ParsedOperator::Minus(span)),
             &Asterisk(span) => Some(ParsedOperator::Asterisk(span)),
             _ => None,
+        };
+
+        if op.is_some() {
+            self.inc();
         }
+
+        op
     }
 }

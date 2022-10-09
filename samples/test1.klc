@@ -1,5 +1,6 @@
 
 
 fn main() {
-    let a = 184_903;
+    let a = -(184_903);
+    let mut b = ();
 }
