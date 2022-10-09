@@ -154,20 +154,78 @@ impl ParsedExpressionAtom {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ParsedOperator {
-    Plus(Span),
-    Minus(Span),
-    Asterisk(Span),
-    Slash(Span),
+
+    // Arithmetic
+    UnaryPlus(Span),
+    UnaryMinus(Span),
+    BinaryAddition(Span),
+    BinarySubtraction(Span),
+    BinaryMultiplication(Span),
+    BinaryDivision(Span),
+    BinaryModulo(Span),
+
+    // Boolean logic
+    UnaryLogicalNot(Span),
+    BinaryLogicalAnd(Span),
+    BinaryLogicalOr(Span),
+    BinaryLogicalXor(Span),
+
+    // Pointers
+    UnaryReference(Span),
+    UnaryDereference(Span),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum OperatorAssociativity {
+    LeftToRight,
+    RightToLeft,
 }
 
 impl ParsedOperator {
     pub fn span(&self) -> Span {
         use ParsedOperator::*;
         match self {
-            Plus(span) |
-            Minus(span) |
-            Asterisk(span) |
-            Slash(span) => *span,
+            UnaryPlus(span) |
+            UnaryMinus(span) |
+            BinaryAddition(span) |
+            BinarySubtraction(span) |
+            BinaryMultiplication(span) |
+            BinaryDivision(span) |
+            BinaryModulo(span) |
+            UnaryLogicalNot(span) |
+            BinaryLogicalAnd(span) |
+            BinaryLogicalOr(span) |
+            BinaryLogicalXor(span) |
+            UnaryReference(span) |
+            UnaryDereference(span) => *span,
+        }
+    }
+
+    /// Reference: https://en.cppreference.com/w/cpp/language/operator_precedence
+    /// Everything is multiplied by 10 so we can insert our own categories.
+    pub fn precedence(&self) -> i32 {
+        use ParsedOperator::*;
+        match self {
+            UnaryLogicalNot(_) | UnaryPlus(_) | UnaryMinus(_) | UnaryReference(_) | UnaryDereference(_) => 30,
+            BinaryMultiplication(_) | BinaryDivision(_) | BinaryModulo(_) => 50,
+            BinaryAddition(_) | BinarySubtraction(_) => 60,
+            BinaryLogicalAnd(_) => 140,
+            BinaryLogicalXor(_) => 145,
+            BinaryLogicalOr(_) => 150,
+        }
+    }
+
+    /// Reference: https://en.cppreference.com/w/cpp/language/operator_precedence
+    pub fn associativity(&self) -> OperatorAssociativity {
+        use ParsedOperator::*;
+        use OperatorAssociativity::*;
+        match self {
+            UnaryLogicalNot(_) | UnaryPlus(_) | UnaryMinus(_) | UnaryReference(_) | UnaryDereference(_) => RightToLeft,
+            BinaryMultiplication(_) | BinaryDivision(_) | BinaryModulo(_) => LeftToRight,
+            BinaryAddition(_) | BinarySubtraction(_) => LeftToRight,
+            BinaryLogicalAnd(_) => LeftToRight,
+            BinaryLogicalXor(_) => LeftToRight,
+            BinaryLogicalOr(_) => LeftToRight,
         }
     }
 }
@@ -672,9 +730,9 @@ impl<'src> Parser<'src> {
         use Token::*;
 
         let op = match self.token().unwrap() {
-            &Plus(span) => Some(ParsedOperator::Plus(span)),
-            &Minus(span) => Some(ParsedOperator::Minus(span)),
-            &Asterisk(span) => Some(ParsedOperator::Asterisk(span)),
+            &Plus(span) => Some(ParsedOperator::UnaryPlus(span)),
+            &Minus(span) => Some(ParsedOperator::UnaryMinus(span)),
+            &Asterisk(span) => Some(ParsedOperator::UnaryDereference(span)),
             _ => None,
         };
 

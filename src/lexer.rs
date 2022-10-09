@@ -13,6 +13,12 @@ pub enum Token<'src> {
     Function(Span),
     Let(Span),
     Mut(Span),
+    If(Span),
+    Else(Span),
+    And(Span),
+    Or(Span),
+    Not(Span),
+    Xor(Span),
 
     // special characters and operators
     LParen(Span),
@@ -57,6 +63,12 @@ impl<'src> Token<'src> {
             Function(span) |
             Let(span) |
             Mut(span) |
+            If(span) |
+            Else(span) |
+            And(span) |
+            Or(span) |
+            Not(span) |
+            Xor(span) |
             LParen(span) |
             RParen(span) |
             LBrace(span) |
@@ -344,10 +356,17 @@ impl<'src> Lexer<'src> {
     }
 
     fn lex_keyword(&self, identifier: &'src str, span: Span) -> Option<Token<'src>> {
+        use Token::*;
         match identifier {
-            "fn" => Some(Token::Function(span)),
-            "let" => Some(Token::Let(span)),
-            "mut" => Some(Token::Mut(span)),
+            "fn" => Some(Function(span)),
+            "let" => Some(Let(span)),
+            "mut" => Some(Mut(span)),
+            "if" => Some(If(span)),
+            "else" => Some(Else(span)),
+            "and" => Some(And(span)),
+            "or" => Some(Or(span)),
+            "not" => Some(Not(span)),
+            "xor" => Some(Xor(span)),
             _ => None,
         }
     }
