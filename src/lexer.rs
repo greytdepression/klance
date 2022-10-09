@@ -3,11 +3,11 @@ use std::{cmp::{min, max}, str::Chars};
 use crate::{Span, Error};
 
 #[derive(Debug, Clone, Copy)]
-pub enum Token<'a> {
+pub enum Token<'src> {
     Unknown(Span),
-    Identifier(&'a str, Span),
+    Identifier(&'src str, Span),
     NumberLiteral(u128, Span),
-    StringLiteral(&'a str, Span),
+    StringLiteral(&'src str, Span),
 
     // keywords
     Function(Span),
@@ -34,8 +34,8 @@ pub enum Token<'a> {
     Slash(Span),
 }
 
-pub struct Lexer<'a> {
-    source: &'a str,
+pub struct Lexer<'src> {
+    source: &'src str,
     source_chars: Vec<char>,
     char_index: usize,
     byte_index: usize,
@@ -47,7 +47,7 @@ pub struct Lexer<'a> {
 
 // Implementations
 
-impl<'a> Token<'a> {
+impl<'src> Token<'src> {
     pub fn span(&self) -> Span {
         use Token::*;
         match self {
@@ -79,8 +79,8 @@ impl<'a> Token<'a> {
     }
 }
 
-impl<'a> Lexer<'a> {
-    pub fn new(source: &'a str) -> Lexer<'a> {
+impl<'src> Lexer<'src> {
+    pub fn new(source: &'src str) -> Lexer<'src> {
         let chars: Vec<_> = source.chars().collect();
         let num_chars = chars.len();
         Lexer {
@@ -137,7 +137,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    pub fn lex(&mut self) -> Vec<Token<'a>> {
+    pub fn lex(&mut self) -> Vec<Token<'src>> {
         let mut tokens = Vec::with_capacity(self.source.len());
 
         assert!(self.source_len == self.source_chars.len());
@@ -182,7 +182,7 @@ impl<'a> Lexer<'a> {
         tokens
     }
 
-    fn lex_string(&mut self) -> Token<'a> {
+    fn lex_string(&mut self) -> Token<'src> {
         assert!(self.char() == '"');
 
         self.inc_index();
@@ -216,7 +216,7 @@ impl<'a> Lexer<'a> {
         Token::StringLiteral(string, span)
     }
 
-    fn lex_operator(&mut self) -> Token<'a> {
+    fn lex_operator(&mut self) -> Token<'src> {
         use Token::*;
 
         let ch = self.char();
@@ -255,7 +255,7 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn lex_number_or_name(&mut self) -> Token<'a> {
+    fn lex_number_or_name(&mut self) -> Token<'src> {
         if self.char().is_ascii() && !self.char().is_alphanumeric() {
             return Token::Unknown(self.span())
         }
@@ -269,7 +269,7 @@ impl<'a> Lexer<'a> {
         self.lex_keyword_or_identifier()
     }
 
-    fn lex_number(&mut self) -> Token<'a> {
+    fn lex_number(&mut self) -> Token<'src> {
         // TODO: add support for binary and hex digits
 
         let start_span = self.span();
@@ -316,7 +316,7 @@ impl<'a> Lexer<'a> {
         return Token::NumberLiteral(value, span);
     }
 
-    fn lex_keyword_or_identifier(&mut self) -> Token<'a> {
+    fn lex_keyword_or_identifier(&mut self) -> Token<'src> {
         if !is_identifier_character(self.char(), true) {
             return Token::Unknown(self.span());
         }
@@ -343,7 +343,7 @@ impl<'a> Lexer<'a> {
         Token::Identifier(string, span_start.merge(span_end))
     }
 
-    fn lex_keyword(&self, identifier: &'a str, span: Span) -> Option<Token<'a>> {
+    fn lex_keyword(&self, identifier: &'src str, span: Span) -> Option<Token<'src>> {
         match identifier {
             "fn" => Some(Token::Function(span)),
             "let" => Some(Token::Let(span)),
