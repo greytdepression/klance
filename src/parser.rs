@@ -54,6 +54,7 @@ pub struct ParsedFunction<'src> {
     error_type_span: Option<Span>,
     visibility: Visibility,
     code_block: ParsedCodeBlock<'src>,
+    span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -382,11 +383,11 @@ impl<'src> Parser<'src> {
     }
 
     fn expr_span(&self, id: ExpressionId) -> Span {
-        self.expressions[id.0].span()
+        self.get_expr(id).span()
     }
 
     fn atom_span(&self, id: ExpressionAtomId) -> Span {
-        self.expression_atoms[id.0].span()
+        self.get_atom(id).span()
     }
 
     // We are always going to make the parse function return options, but the
@@ -443,8 +444,6 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_function(&mut self) -> Option<ParsedFunction<'src>> {
-        let inital_index = self.token_index;
-
         if !self.has_token() {
             return None;
         }
@@ -541,6 +540,7 @@ impl<'src> Parser<'src> {
                 error_type_span: None,
                 visibility: Visibility::Private,
                 code_block: code_block.unwrap(),
+                span: fun_span,
             })
         } else {
             None
@@ -638,8 +638,6 @@ impl<'src> Parser<'src> {
 
         let mut success = true;
         let mut total_span = self.token().unwrap().span();
-
-        let let_span = self.token().unwrap().span();
 
         if !self.expect_inc() {
             return None;
