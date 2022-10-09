@@ -313,7 +313,7 @@ impl<'src> Lexer<'src> {
         }
 
         let span = start_span.merge(self.span_excl());
-        return Token::NumberLiteral(value, span);
+        Token::NumberLiteral(value, span)
     }
 
     fn lex_keyword_or_identifier(&mut self) -> Token<'src> {
