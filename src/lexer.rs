@@ -2,7 +2,7 @@ use core::num;
 use std::{cmp::{min, max}, str::Chars};
 use crate::{Span, Error};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum Token<'a> {
     Unknown(Span),
     Identifier(&'a str, Span),
