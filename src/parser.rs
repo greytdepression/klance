@@ -1,5 +1,9 @@
+use std::cmp::Ordering;
+use std::fmt::Debug;
+
 use crate::{Span, Error};
 use crate::lexer::Token;
+use crate::datastructure::{BinaryTree, Side};
 
 #[derive(Debug, Clone)]
 pub struct ParsedStruct<'src> {
@@ -132,10 +136,22 @@ impl ParsedExpression {
     }
 }
 
+impl ToString for ParsedExpression {
+    fn to_string(&self) -> String {
+        match self {
+            ParsedExpression::Junk(_) => "Junk".into(),
+            ParsedExpression::Atom(atom, _) => atom.to_string(),
+            ParsedExpression::BinaryOperation(lhs, op, rhs, _)
+                => format!("({} {} {})", lhs.to_string(), op.to_string(), rhs.to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedExpressionAtom {
     Unit(Span),
     IntegerConstant(u128, Span),
+    BooleanConstant(bool, Span),
     EnclosedExpression(Box<ParsedExpression>, Span),
     UnaryPrefixedAtom(ParsedOperator, Box<ParsedExpressionAtom>, Span),
 }
@@ -146,8 +162,21 @@ impl ParsedExpressionAtom {
         match self {
             Unit(span) |
             IntegerConstant(_, span) |
+            BooleanConstant(_, span) |
             EnclosedExpression(_, span) |
             UnaryPrefixedAtom(_, _, span) => *span,
+        }
+    }
+}
+
+impl ToString for ParsedExpressionAtom {
+    fn to_string(&self) -> String {
+        match self {
+            ParsedExpressionAtom::Unit(_) => "()".into(),
+            ParsedExpressionAtom::IntegerConstant(val, _) => format!("{}", val),
+            ParsedExpressionAtom::BooleanConstant(val, _) => format!("{}", val),
+            ParsedExpressionAtom::EnclosedExpression(expr, _) => format!("({})", expr.to_string()),
+            ParsedExpressionAtom::UnaryPrefixedAtom(op, expr, _) => format!("({}{})", op.to_string(), expr.to_string()),
         }
     }
 }
@@ -173,6 +202,26 @@ pub enum ParsedOperator {
     // Pointers
     UnaryReference(Span),
     UnaryDereference(Span),
+}
+
+impl ToString for ParsedOperator {
+    fn to_string(&self) -> String {
+        match self {
+            ParsedOperator::UnaryPlus(_) => "+".into(),
+            ParsedOperator::UnaryMinus(_) => "-".into(),
+            ParsedOperator::BinaryAddition(_) => "+".into(),
+            ParsedOperator::BinarySubtraction(_) => "-".into(),
+            ParsedOperator::BinaryMultiplication(_) => "*".into(),
+            ParsedOperator::BinaryDivision(_) => "/".into(),
+            ParsedOperator::BinaryModulo(_) => "%".into(),
+            ParsedOperator::UnaryLogicalNot(_) => "not ".into(),
+            ParsedOperator::BinaryLogicalAnd(_) => "and".into(),
+            ParsedOperator::BinaryLogicalOr(_) => "or".into(),
+            ParsedOperator::BinaryLogicalXor(_) => "xor".into(),
+            ParsedOperator::UnaryReference(_) => "&".into(),
+            ParsedOperator::UnaryDereference(_) => "*".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -226,6 +275,20 @@ impl ParsedOperator {
             BinaryLogicalAnd(_) => LeftToRight,
             BinaryLogicalXor(_) => LeftToRight,
             BinaryLogicalOr(_) => LeftToRight,
+        }
+    }
+}
+
+impl ParsedOperator {
+    fn cmp(&self, rhs: &ParsedOperator) -> Ordering {
+        use Ordering::*;
+        match self.precedence().cmp(&rhs.precedence()) {
+            Ordering::Less => Less,
+            Ordering::Greater => Greater,
+            Ordering::Equal => match self.associativity() {
+                OperatorAssociativity::LeftToRight => Less,
+                OperatorAssociativity::RightToLeft => Greater,
+            },
         }
     }
 }
@@ -617,49 +680,162 @@ impl<'src> Parser<'src> {
     }
 
     fn parse_expression(&mut self) -> Option<ParsedExpression> {
-        use Token::*;
-
-        let mut top_expression: Option<ParsedExpression> = None;
-
         let mut span = self.span();
 
+        if !self.has_token() {
+            return None;
+        }
+
+        let mut atoms: Vec<ParsedExpressionAtom> = vec![];
+        let mut operators: Vec<ParsedOperator> = vec![];
+
+        let mut tree: BinaryTree<ExpressionTreeData, _> = BinaryTree::new(|lhs, rhs| {
+            use ExpressionTreeData::*;
+            match (lhs, rhs) {
+                (Atom(_), _) | (_, Atom(_)) => Ordering::Equal,
+                (ExpressionTreeData::BinOp(_, lhs), ExpressionTreeData::BinOp(_, rhs)) => lhs.cmp(&rhs),
+            }
+        });
+
+
+        // Next expression atom
+        let lhs_atom = if let Some(atom) = self.parse_expression_atom() {
+            atom
+        } else {
+            return None;
+        };
+
+        span = span.merge(lhs_atom.span());
+
+        atoms.push(lhs_atom);
+        let atom_id = atoms.len() - 1; // is equal to 0
+
+        let lhs_data = ExpressionTreeData::Atom(atom_id);
+        _ = tree.insert_root(lhs_data, Side::Left, None);
+
         loop {
-            if !self.has_token() {
-                return None;
-            }
+            // Binary operation
+            let op = self.parse_binary_operator();
 
-            let mut partial_expr: Option<ParsedExpression> = None;
-
-            // Next expression atom
-            if let Some(atom) = self.parse_expression_atom() {
-                let atom_span = atom.span();
-
-                span = span.merge(atom_span);
-
-                partial_expr = Some(ParsedExpression::Atom(atom, atom_span));
-            }
-
-            if partial_expr.is_none() {
+            if op.is_none() {
                 break;
             }
 
-            // TODO: Suffix operators
+            let op = op.unwrap();
 
-            // TODO: Binary operators
+            operators.push(op);
+            let op_id = operators.len() - 1;
 
-            // Note: This should probably work by parsing 1 atom, a binary operation, and then recursively parsing an expression.
-            //       After that we can perform precedence checks and reorder if necessary.
+            // RHS atom
+            let rhs_atom = self.parse_expression_atom();
 
-            top_expression = Some(partial_expr.unwrap());
+            if rhs_atom.is_none() {
+                self.errors.push(Error::WithHint(
+                    "Incomplete expression.".into(),
+                    span,
+                    "Binary operator lacks expression to act upon.".into(),
+                    op.span(),
+                ));
 
-            // TODO: loop
+                return None;
+            }
 
-            break;
+            let rhs_atom = rhs_atom.unwrap();
 
+            atoms.push(rhs_atom);
+            let rhs_atom_id = atoms.len() - 1;
+
+            // Add data to tree
+
+            let op_data = ExpressionTreeData::BinOp(op_id, op);
+            let rhs_atom_data = ExpressionTreeData::Atom(rhs_atom_id);
+
+            _ = tree.insert_root(
+                op_data,
+                Side::Left,
+                Some(rhs_atom_data)
+            );
         }
 
-        top_expression
+        fn print_tree<F>(
+            tree: &BinaryTree<ExpressionTreeData, F>,
+            atoms: &Vec<ParsedExpressionAtom>,
+            start_index: usize
+        ) -> String
+            where F: Fn(ExpressionTreeData, ExpressionTreeData) -> Ordering
+        {
+            use ExpressionTreeData::*;
+            let node = tree.get_node(start_index);
+
+            if let &Atom(id) = node.data() {
+                let atom = atoms[id].clone();
+
+                return atom.to_string();
+            }
+
+            assert!(matches!(node.data(), &BinOp(_, _)));
+
+            let op = if let &BinOp(_, op) = node.data() {
+                op
+            } else {
+                panic!("unreachable code (Parser::parse_expression()::build_expression_tree()): node.data() not BinOp");
+            };
+
+            let lhs = tree.get_node(start_index).lhs().expect("Binary operator node does not have an lhs!");
+            let rhs = tree.get_node(start_index).rhs().expect("Binary operator node does not have an rhs!");
+
+            let lhs = print_tree(tree, atoms, lhs);
+            let rhs = print_tree(tree, atoms, rhs);
+
+            format!("({} {} {})", lhs, op.to_string(), rhs)
+        }
+
+        fn build_expression_tree<F>(
+            tree: &BinaryTree<ExpressionTreeData, F>,
+            atoms: &Vec<ParsedExpressionAtom>,
+            start_index: usize
+        ) -> ParsedExpression
+            where F: Fn(ExpressionTreeData, ExpressionTreeData) -> Ordering
+        {
+            use ExpressionTreeData::*;
+            let node = tree.get_node(start_index);
+
+            if let &Atom(id) = node.data() {
+                let atom = atoms[id].clone();
+
+                let span = atom.span();
+
+                return ParsedExpression::Atom(atom, span);
+            }
+
+            assert!(matches!(node.data(), &BinOp(_, _)));
+
+            let op = if let &BinOp(_, op) = node.data() {
+                op
+            } else {
+                panic!("unreachable code (Parser::parse_expression()::build_expression_tree()): node.data() not BinOp");
+            };
+
+            let lhs = tree.get_node(start_index).lhs().expect("Binary operator node does not have an lhs!");
+            let rhs = tree.get_node(start_index).rhs().expect("Binary operator node does not have an rhs!");
+
+            let lhs = build_expression_tree(tree, atoms, lhs);
+            let rhs = build_expression_tree(tree, atoms, rhs);
+
+            let span = lhs.span().merge(rhs.span());
+
+            ParsedExpression::BinaryOperation(
+                Box::new(lhs),
+                op,
+                Box::new(rhs),
+                span,
+            )
+        }
+
+        Some(build_expression_tree(&tree, &atoms, tree.root()))
     }
+
+
 
     fn parse_expression_atom(&mut self) -> Option<ParsedExpressionAtom> {
         if !self.has_token() {
@@ -675,6 +851,11 @@ impl<'src> Parser<'src> {
 
                 Some(IntegerConstant(value, span))
             },
+            BooleanLiteral(value, span) => {
+                self.inc();
+
+                Some(BooleanConstant(value, span))
+            }
             LParen(mut span) => {
                 if !self.expect_inc() {
                     return None;
@@ -703,10 +884,10 @@ impl<'src> Parser<'src> {
                 if atom.is_none() {
 
                     self.errors.push(Error::WithHint(
+                        "Incomplete expression.".into(),
+                        op.span(),
                         "Unary operator lacks expression atom to act upon.".into(),
                         op.span(),
-                        "Expected an expression atom here.".into(),
-                        op.span().after(),
                     ));
 
                     return None;
@@ -728,11 +909,14 @@ impl<'src> Parser<'src> {
         }
 
         use Token::*;
+        use ParsedOperator::*;
 
         let op = match self.token().unwrap() {
-            &Plus(span) => Some(ParsedOperator::UnaryPlus(span)),
-            &Minus(span) => Some(ParsedOperator::UnaryMinus(span)),
-            &Asterisk(span) => Some(ParsedOperator::UnaryDereference(span)),
+            &Plus(span) => Some(UnaryPlus(span)),
+            &Minus(span) => Some(UnaryMinus(span)),
+            &Asterisk(span) => Some(UnaryDereference(span)),
+            &Not(span) => Some(UnaryLogicalNot(span)),
+            &Ampersand(span) => Some(UnaryReference(span)),
             _ => None,
         };
 
@@ -742,4 +926,41 @@ impl<'src> Parser<'src> {
 
         op
     }
+
+    fn parse_binary_operator(&mut self) -> Option<ParsedOperator> {
+        if !self.has_token() {
+            return None;
+        }
+
+        use Token::*;
+        use ParsedOperator::*;
+
+        let op = match *self.token().unwrap() {
+            Plus(span) => Some(BinaryAddition(span)),
+            Minus(span) => Some(BinaryMultiplication(span)),
+            Asterisk(span) => Some(BinaryMultiplication(span)),
+            Slash(span) => Some(BinaryDivision(span)),
+            Percent(span) => Some(BinaryModulo(span)),
+            And(span) => Some(BinaryLogicalAnd(span)),
+            Or(span) => Some(BinaryLogicalOr(span)),
+            Xor(span) => Some(BinaryLogicalXor(span)),
+            _ => None,
+        };
+
+        if op.is_some() {
+            self.inc();
+        }
+
+        op
+    }
+}
+
+//--------------------------------------------------
+// Helpers
+//--------------------------------------------------
+
+#[derive(Debug, Clone, Copy)]
+enum ExpressionTreeData {
+    Atom(usize),
+    BinOp(usize, ParsedOperator),
 }

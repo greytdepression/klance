@@ -1,6 +1,7 @@
 
 
 fn main() {
-    let a = -(184_903);
+    let a = -(184_903) * 5 + 32 * 7;
     let mut b = ();
+    let c = true and false xor not true;
 }

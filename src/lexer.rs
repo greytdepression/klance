@@ -8,6 +8,7 @@ pub enum Token<'src> {
     Identifier(&'src str, Span),
     NumberLiteral(u128, Span),
     StringLiteral(&'src str, Span),
+    BooleanLiteral(bool, Span),
 
     // keywords
     Function(Span),
@@ -37,7 +38,9 @@ pub enum Token<'src> {
     Plus(Span),
     Minus(Span),
     Asterisk(Span),
+    Ampersand(Span),
     Slash(Span),
+    Percent(Span),
 }
 
 pub struct Lexer<'src> {
@@ -60,6 +63,8 @@ impl<'src> Token<'src> {
             Unknown(span) |
             Identifier(_, span) |
             NumberLiteral(_, span) |
+            StringLiteral(_, span) |
+            BooleanLiteral(_, span) |
             Function(span) |
             Let(span) |
             Mut(span) |
@@ -85,8 +90,9 @@ impl<'src> Token<'src> {
             Plus(span) |
             Minus(span) |
             Asterisk(span) |
+            Ampersand(span) |
             Slash(span) |
-            StringLiteral(_, span) => *span
+            Percent(span) => *span
         }
     }
 }
@@ -179,7 +185,7 @@ impl<'src> Lexer<'src> {
                 ';' => Semicolon(self.span()),
                 '=' => Equals(self.span()),
                 '"' => self.lex_string(),
-                '+' | '-' | '*' | '/' | '<' | '>' => self.lex_operator(),
+                '+' | '-' | '*' | '/' | '<' | '>' | '&' | '%' => self.lex_operator(),
                 _ => self.lex_number_or_name(),
             };
 
@@ -248,6 +254,12 @@ impl<'src> Lexer<'src> {
             },
             '/' => match self.char() {
                 _ => Slash(span),
+            },
+            '&' => match self.char() {
+                _ => Ampersand(span),
+            },
+            '%' => match self.char() {
+                _ => Percent(span),
             },
             '<' => match self.char() {
                 '=' => {
@@ -367,6 +379,8 @@ impl<'src> Lexer<'src> {
             "or" => Some(Or(span)),
             "not" => Some(Not(span)),
             "xor" => Some(Xor(span)),
+            "true" => Some(BooleanLiteral(true, span)),
+            "false" => Some(BooleanLiteral(false, span)),
             _ => None,
         }
     }

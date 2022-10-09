@@ -3,6 +3,7 @@
 mod lexer;
 mod parser;
 mod util;
+mod datastructure;
 
 use lexer::Lexer;
 use parser::Parser;
