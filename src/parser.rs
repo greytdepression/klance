@@ -88,11 +88,20 @@ pub struct ParsedCodeBlock<'src> {
     pub span: Span,
 }
 
+impl<'src> ParsedCodeBlock<'src> {
+    fn empty(span: Span) -> Self {
+        Self {
+            statements: vec![],
+            span,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ParsedStatement<'src> {
     NoOp(Span),
     Expression(ExpressionId, HasSemicolon),
-    VariableDefinition(ParsedVariableDefinition<'src>),
+    VariableDeclaration(ParsedVariableDeclaration<'src>),
     ConstantDefinition(ParsedConstantDefinition<'src>),
     IfStatement(ParsedIfStatement<'src>),
     Block(ParsedCodeBlock<'src>),
@@ -119,7 +128,7 @@ pub enum ParsedElseStatement<'src> {
 }
 
 #[derive(Debug, Clone)]
-pub struct ParsedVariableDefinition<'src> {
+pub struct ParsedVariableDeclaration<'src> {
     pub name: &'src str,
     pub name_span: Span,
     pub type_name: Option<&'src str>,
@@ -165,6 +174,7 @@ impl ParsedExpression {
 
 #[derive(Debug, Clone)]
 pub enum ParsedExpressionAtom<'src> {
+    Junk(Span),
     Unit(Span),
     IntegerConstant(u128, Span),
     BooleanConstant(bool, Span),
@@ -178,6 +188,7 @@ impl<'src> ParsedExpressionAtom<'src> {
     pub fn span(&self) -> Span {
         use ParsedExpressionAtom::*;
         match self {
+            Junk(span) |
             Unit(span) |
             IntegerConstant(_, span) |
             BooleanConstant(_, span) |
@@ -191,6 +202,7 @@ impl<'src> ParsedExpressionAtom<'src> {
     fn to_string<'a>(&self, parser: &Parser<'a>) -> String {
         use ParsedExpressionAtom::*;
         match self {
+            Junk(_) => "🚮".into(),
             Unit(_) => "()".into(),
             IntegerConstant(val, _) => format!("{}", val),
             BooleanConstant(val, _) => format!("{}", val),
@@ -204,6 +216,8 @@ impl<'src> ParsedExpressionAtom<'src> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ParsedOperator {
+    // Debug
+    Junk(Span),
 
     // Arithmetic
     UnaryPlus(Span),
@@ -227,20 +241,22 @@ pub enum ParsedOperator {
 
 impl ToString for ParsedOperator {
     fn to_string(&self) -> String {
+        use ParsedOperator::*;
         match self {
-            ParsedOperator::UnaryPlus(_) => "+".into(),
-            ParsedOperator::UnaryMinus(_) => "-".into(),
-            ParsedOperator::BinaryAddition(_) => "+".into(),
-            ParsedOperator::BinarySubtraction(_) => "-".into(),
-            ParsedOperator::BinaryMultiplication(_) => "*".into(),
-            ParsedOperator::BinaryDivision(_) => "/".into(),
-            ParsedOperator::BinaryModulo(_) => "%".into(),
-            ParsedOperator::UnaryLogicalNot(_) => "not ".into(),
-            ParsedOperator::BinaryLogicalAnd(_) => "and".into(),
-            ParsedOperator::BinaryLogicalOr(_) => "or".into(),
-            ParsedOperator::BinaryLogicalXor(_) => "xor".into(),
-            ParsedOperator::UnaryReference(_) => "&".into(),
-            ParsedOperator::UnaryDereference(_) => "*".into(),
+            Junk(_) => "🚮".into(),
+            UnaryPlus(_) => "+".into(),
+            UnaryMinus(_) => "-".into(),
+            BinaryAddition(_) => "+".into(),
+            BinarySubtraction(_) => "-".into(),
+            BinaryMultiplication(_) => "*".into(),
+            BinaryDivision(_) => "/".into(),
+            BinaryModulo(_) => "%".into(),
+            UnaryLogicalNot(_) => "not ".into(),
+            BinaryLogicalAnd(_) => "and".into(),
+            BinaryLogicalOr(_) => "or".into(),
+            BinaryLogicalXor(_) => "xor".into(),
+            UnaryReference(_) => "&".into(),
+            UnaryDereference(_) => "*".into(),
         }
     }
 }
@@ -255,6 +271,7 @@ impl ParsedOperator {
     pub fn span(&self) -> Span {
         use ParsedOperator::*;
         match self {
+            Junk(span) |
             UnaryPlus(span) |
             UnaryMinus(span) |
             BinaryAddition(span) |
@@ -282,6 +299,7 @@ impl ParsedOperator {
             BinaryLogicalAnd(_) => 140,
             BinaryLogicalXor(_) => 145,
             BinaryLogicalOr(_) => 150,
+            Junk(_) => 10000,
         }
     }
 
@@ -296,6 +314,7 @@ impl ParsedOperator {
             BinaryLogicalAnd(_) => LeftToRight,
             BinaryLogicalXor(_) => LeftToRight,
             BinaryLogicalOr(_) => LeftToRight,
+            Junk(_) => LeftToRight,
         }
     }
 }
@@ -333,6 +352,8 @@ pub struct ExpressionId(usize);
 
 #[derive(Debug, Clone, Copy)]
 pub struct ExpressionAtomId(usize);
+
+use ParsingResult::*;
 
 impl<'src> Parser<'src> {
     pub fn new(tokens: Vec<Token<'src>>) -> Parser<'src> {
@@ -373,6 +394,10 @@ impl<'src> Parser<'src> {
         self.token_index < self.tokens.len()
     }
 
+    fn eof(&self) -> bool {
+        !self.has_token()
+    }
+
     fn inc(&mut self) -> bool {
         self.token_index += 1;
         self.token_index < self.tokens.len()
@@ -381,6 +406,8 @@ impl<'src> Parser<'src> {
     fn span(&self) -> Span {
         if let Some(tk) = self.token() {
             tk.span()
+        } else if let Some(tk) = self.tokens.last() {
+            tk.span().after()
         } else {
             Span::default()
         }
@@ -410,10 +437,46 @@ impl<'src> Parser<'src> {
         self.get_atom(id).span()
     }
 
+    fn stmt_span(&self, stmt: &ParsedStatement) -> Span {
+        use ParsedStatement::*;
+        match stmt {
+            &NoOp(span) => span,
+            &Expression(id, _) => self.expr_span(id),
+            VariableDeclaration(var_defn) => var_defn.span,
+            ConstantDefinition(const_defn) => const_defn.span,
+            IfStatement(if_stmt) => if_stmt.span,
+            Block(block) => block.span,
+        }
+    }
+
+    fn junk_expr(&mut self, maybe_span: Option<Span>) -> ExpressionId {
+        let span = if let Some(span) = maybe_span {
+            span
+        } else {
+            self.span()
+        };
+
+        self.expressions.push(ParsedExpression::Junk(span));
+
+        self.current_expr()
+    }
+
+    fn junk_atom(&mut self, maybe_span: Option<Span>) -> ExpressionAtomId {
+        let span = if let Some(span) = maybe_span {
+            span
+        } else {
+            self.span()
+        };
+
+        self.expression_atoms.push(ParsedExpressionAtom::Junk(span));
+
+        self.current_expr_atom()
+    }
+
     // We are always going to make the parse function return options, but the
     // `parse_struct` function in particular will always return a valid parsed
     // struct.
-    fn parse_struct(&mut self, is_file_struct: bool) -> Option<ParsedStruct<'src>> {
+    fn parse_struct(&mut self, is_file_struct: bool) -> ParsingResult<ParsedStruct<'src>> {
         let mut fields = vec![];
         let mut constants = vec![];
         let mut functions = vec![];
@@ -430,7 +493,7 @@ impl<'src> Parser<'src> {
 
 
             // try parse a function
-            if let Some(func) = self.parse_function() {
+            if let Success(func) = self.parse_function() {
                 functions.push(func);
             } else {
                 success = false;
@@ -444,7 +507,7 @@ impl<'src> Parser<'src> {
             start_span
         };
 
-        Some(ParsedStruct {
+        Success(ParsedStruct {
             is_file_struct,
             fields,
             constants,
@@ -453,23 +516,9 @@ impl<'src> Parser<'src> {
         })
     }
 
-    fn expect_inc(&mut self) -> bool {
-        if !self.inc() {
-
-            self.errors.push(Error::Error(
-                "Unexpected end of token stream in function definition.".into(),
-                self.tokens[self.tokens.len() - 1].span().after()
-            ));
-
-            return false;
-        }
-
-        true
-    }
-
-    fn parse_function(&mut self) -> Option<ParsedFunction<'src>> {
+    fn parse_function(&mut self) -> ParsingResult<ParsedFunction<'src>> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         use Token::*;
@@ -477,59 +526,79 @@ impl<'src> Parser<'src> {
         let mut fun_span = self.span();
 
         let mut success = true;
+        let mut maybe_err_span: Option<Span> = None;
 
         // TODO: 0. Visibility
 
         // 1. `fn` keyword
-        if let Function(_) = self.token().unwrap() {} else {
-            return None;
+        if !matches!(self.token(), Some(Function(_))) {
+            return WrongType;
         }
-        if !self.expect_inc() {
-            return None;
-        }
+        fun_span.merge_into(self.token().unwrap().span());
+        self.inc();
 
         // TODO: 2. Generics
 
         // 3. Identifier/Name
-        const TEMP_NAME: &'static str = "#TEMPORARY_IDENTIFIER#";
-        let mut name: &'src str = TEMP_NAME;
+        let mut name: &'src str = "(missing identifier)";
         let name_span = self.span();
         {
-            if let &Identifier(nm, _) = self.token().unwrap() {
+            if let Some(&Identifier(nm, span)) = self.token() {
                 name = nm;
 
-                if !self.expect_inc() {
-                    return None;
-                }
+                fun_span.merge_into(span);
             } else {
                 self.errors.push(Error::WithHint(
-                    "Unexpected token in function definition.".into(),
-                    name_span,
-                    format!("Expected Identifier token for function name; instead got:\n{:?}", self.token().unwrap()),
+                    "Function definition misses identifier.".into(),
+                    fun_span,
+                    "Expected name of function at this place.".into(),
                     name_span
                 ));
+
+                maybe_err_span = Some(fun_span.after());
+
                 success = false;
             }
         }
 
         fun_span = fun_span.merge(name_span);
+        self.inc();
 
         // 4. Parameters
-
         {
-            if let LParen(_) = self.token().unwrap() {
-                if !self.expect_inc() {
-                    return None;
-                }
+            if let Some(&LParen(span)) = self.token() {
+                fun_span.merge_into(span);
+            } else {
+                self.errors.push(Error::WithHint(
+                    "Function definition misses paranthesis pair.".into(),
+                    fun_span,
+                    "Expected opening parenthesis `(` at this place.".into(),
+                    fun_span.after(),
+                ));
+
+                maybe_err_span = Some(fun_span.after());
+
+                success = false;
             }
+            self.inc();
 
             // TODO: actually parse parameters not just parentheses
 
-            if let RParen(_) = self.token().unwrap() {
-                if !self.expect_inc() {
-                    return None;
-                }
+            if let Some(&RParen(span)) = self.token() {
+                fun_span.merge_into(span);
+            } else {
+                self.errors.push(Error::WithHint(
+                    "Function definition misses paranthesis pair.".into(),
+                    fun_span,
+                    "Expected closing parenthesis `)` at this place.".into(),
+                    fun_span.after(),
+                ));
+
+                maybe_err_span = Some(fun_span.after());
+
+                success = false;
             }
+            self.inc();
         }
 
 
@@ -538,138 +607,350 @@ impl<'src> Parser<'src> {
         // TODO: 6. Return type
 
         // 7. Code block
-        let mut code_block: Option<ParsedCodeBlock> = None;
-        if let Some(code_blk) = self.parse_code_block() {
-            fun_span = fun_span.merge(code_blk.span);
-            code_block = Some(code_blk);
+        let dummy_block = ParsedCodeBlock::empty(fun_span.after());
+        let mut has_code_block = true;
+        let code_block = match self.parse_code_block() {
+            Success(t) => {
+                fun_span.merge_into(t.span);
+
+                t
+            },
+            WrongType | EOF(None, None) => {
+                success = false;
+                has_code_block = false;
+                maybe_err_span = Some(fun_span.after());
+
+                dummy_block
+            },
+            SyntaxError(maybe_t, err_span) | EOF(maybe_t, Some(err_span)) => {
+                success = false;
+                has_code_block = true;
+                maybe_err_span = Some(err_span);
+
+                maybe_t.unwrap_or(dummy_block)
+            },
+            EOF(Some(t), None) => {
+                success = false;
+                has_code_block = true;
+                maybe_err_span = Some(fun_span.after());
+
+                t
+            },
+        };
+
+        if !has_code_block {
+            self.errors.push(Error::WithHint(
+                "Function definition misses executable block.".into(),
+                fun_span,
+                "Expected code block here".into(),
+                fun_span.after(),
+            ));
+        }
+
+        let parsed_fun = ParsedFunction {
+            name: name,
+            name_span,
+            parameters: vec![],
+            return_type_name: None,
+            return_type_span: None,
+            throws: false,
+            error_type_name: None,
+            error_type_span: None,
+            visibility: Visibility::Private,
+            code_block: code_block,
+            span: fun_span,
+        };
+
+        if success {
+            Success(parsed_fun)
         } else {
-            self.errors.push(Error::Error(
-                "Function definition lacks executable block.".into(),
-                fun_span.after()
+            if self.eof() {
+                EOF(Some(parsed_fun), maybe_err_span)
+            } else {
+                SyntaxError(Some(parsed_fun), maybe_err_span.unwrap())
+            }
+        }
+    }
+
+    fn parse_code_block(&mut self) -> ParsingResult<ParsedCodeBlock<'src>> {
+        if !self.has_token() {
+            return EOF(None, None);
+        }
+
+        use Token::*;
+
+
+        let mut block_span = self.token().unwrap().span();
+
+        // 1. Open brace
+        if let Some(&LBrace(_)) = self.token() {
+            self.inc();
+        } else {
+            return WrongType;
+        }
+
+        let mut success = true;
+
+        let mut maybe_err_span: Option<Span> = None;
+
+
+        // TODO: 2. Code ig
+        let mut statements = vec![];
+        while !matches!(self.token(), Some(RBrace(_))) {
+            match self.parse_statement() {
+                Success(t) => {
+                    block_span.merge_into(self.stmt_span(&t));
+                    statements.push(t);
+                },
+                WrongType => break, // FIXME: maybe we don't want to break here?
+                SyntaxError(Some(t), err_span) => {
+                    block_span.merge(self.stmt_span(&t));
+                    statements.push(t);
+
+                    block_span.merge_into(err_span);
+                    maybe_err_span = Some(err_span);
+                },
+                EOF(maybe_t, mb_err_span) => {
+                    if let Some(t) = maybe_t {
+                        block_span.merge(self.stmt_span(&t));
+                        statements.push(t);
+                    }
+
+                    if let Some(err_span) = mb_err_span {
+                        maybe_err_span = Some(err_span);
+                        block_span.merge_into(err_span);
+                    }
+
+                    // EOF, so we can break anyway
+                    break;
+                },
+                SyntaxError(None, err_span) => {
+                    maybe_err_span = Some(err_span);
+                    block_span.merge_into(err_span);
+
+                    break; // FIXME: same as above
+                },
+            }
+        }
+
+        // 3. Closing brace
+        if let Some(&RBrace(span)) = self.token() {
+            self.inc();
+
+            block_span.merge_into(span);
+        } else {
+            self.errors.push(Error::WithHint(
+                "Block misses closing brace.".into(),
+                block_span,
+                "Expected `}` here.".into(),
+                block_span.after(),
             ));
 
             success = false;
         }
 
-
+        let block = ParsedCodeBlock {
+            statements,
+            span: block_span,
+        };
         if success {
-            Some(ParsedFunction {
-                name: name,
-                name_span,
-                parameters: vec![],
-                return_type_name: None,
-                return_type_span: None,
-                throws: false,
-                error_type_name: None,
-                error_type_span: None,
-                visibility: Visibility::Private,
-                code_block: code_block.unwrap(),
-                span: fun_span,
-            })
+            Success(block)
         } else {
-            None
-        }
-    }
-
-    fn parse_code_block(&mut self) -> Option<ParsedCodeBlock<'src>> {
-        if !self.has_token() {
-            return None;
-        }
-
-        use Token::*;
-
-        // 1. Open brace
-        if matches!(self.token(), Some(LBrace(_))) {
-            if !self.expect_inc() {
-                return None;
-            }
-        } else {
-            return None;
-        }
-
-        // TODO: 2. Code ig
-        let mut found_statement = true;
-        let mut statements = vec![];
-        while found_statement && !matches!(self.token(), Some(RBrace(_))) {
-            if let Some(stmt) = self.parse_statement() {
-                statements.push(stmt);
+            if self.eof() {
+                EOF(Some(block), maybe_err_span)
             } else {
-                found_statement = false;
+                SyntaxError(Some(block), maybe_err_span.unwrap_or(block_span))
             }
         }
-
-        // 3. Closing brace
-        if matches!(self.token(), Some(RBrace(_))) {
-            self.inc();
-
-            return Some(ParsedCodeBlock {
-                statements,
-                span: self.span(),
-            })
-        }
-
-        None
     }
 
-    fn parse_statement(&mut self) -> Option<ParsedStatement<'src>> {
+    fn parse_statement(&mut self) -> ParsingResult<ParsedStatement<'src>> {
         use Token::*;
 
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         let mut maybe_stmt: Option<ParsedStatement<'src>> = None;
         let start_span = self.token().unwrap().span();
         let mut maybe_span = None;
 
+        let mut maybe_err_span: Option<Span> = None;
+
         let mut needs_semicolon = true;
 
-        // 0. Check if there is a lonely semicolon
-        if matches!(self.token(), Some(Semicolon(_))) {
-            maybe_span = Some(self.token().unwrap().span());
-            maybe_stmt = Some(ParsedStatement::NoOp(self.token().unwrap().span()));
+        let mut success = true;
 
-            // FIXME: Emit warning about this semicolon
+        // This loop is just so that we can break out at any point if we want to
+        loop {
+            // 0. Check if there is a lonely semicolon
+            if matches!(self.token(), Some(Semicolon(_))) {
+                maybe_span = Some(self.token().unwrap().span());
+                maybe_stmt = Some(ParsedStatement::NoOp(self.token().unwrap().span()));
 
-            self.inc();
+                // FIXME: Emit warning about this semicolon
 
-            needs_semicolon = false;
+                self.inc();
+
+                needs_semicolon = false;
+                break;
+            }
+
+            // 1. Check if there is a variable definition
+            let var_decl = self.parse_variable_declaration();
+            match var_decl {
+                Success(t) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::VariableDeclaration(t));
+
+                    needs_semicolon = true;
+                    break;
+                },
+                WrongType => {},
+                EOF(None, None) => break,
+                SyntaxError(None, err_span) | EOF(None, Some(err_span)) => {
+                    let dummy = ParsedVariableDeclaration {
+                        name: "(missing identifier)",
+                        name_span: err_span,
+                        type_name: None,
+                        type_span: None,
+                        mutability: Mutability::Immutable,
+                        mutability_span: None,
+                        initial_value: self.junk_expr(Some(err_span)),
+                        span: err_span,
+                    };
+                    maybe_stmt = Some(ParsedStatement::VariableDeclaration(dummy));
+                    maybe_span = Some(err_span);
+                    maybe_err_span = Some(err_span);
+
+                    success = false;
+                    break;
+                },
+                SyntaxError(Some(t), err_span) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::VariableDeclaration(t));
+                    maybe_err_span = Some(err_span);
+
+                    success = false;
+                    break;
+                },
+                EOF(Some(t), eof_maybe_span) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::VariableDeclaration(t));
+                    maybe_err_span = eof_maybe_span;
+
+                    success = false;
+                    break;
+                },
+            }
+
+            // 2. Check if there is an if statement
+            match self.parse_if_statement() {
+                Success(if_stmt) => {
+                    maybe_span = Some(if_stmt.span);
+                    maybe_stmt = Some(ParsedStatement::IfStatement(if_stmt));
+
+                    needs_semicolon = false;
+                    break;
+                },
+                WrongType => {},
+                EOF(None, None) => break,
+                SyntaxError(None, err_span) | EOF(None, Some(err_span)) => {
+                    let dummy = ParsedIfStatement {
+                        condition: self.junk_expr(Some(err_span)),
+                        then_block: ParsedCodeBlock::empty(err_span),
+                        else_statment: None,
+                        span: err_span,
+                    };
+                    maybe_stmt = Some(ParsedStatement::IfStatement(dummy));
+                    maybe_span = Some(err_span);
+                    maybe_err_span = Some(err_span);
+
+                    success = false;
+                    break;
+                },
+                SyntaxError(Some(t), err_span) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::IfStatement(t));
+                    maybe_err_span = Some(err_span);
+
+                    success = false;
+                    break;
+                },
+                EOF(Some(t), eof_maybe_span) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::IfStatement(t));
+                    maybe_err_span = eof_maybe_span;
+
+                    success = false;
+                    break;
+                },
+            }
+
+            // 3. Check if there is a code block
+            match self.parse_code_block() {
+                Success(block) => {
+                    maybe_span = Some(block.span);
+                    maybe_stmt = Some(ParsedStatement::Block(block));
+
+                    needs_semicolon = false;
+                    break;
+                },
+                WrongType => {},
+                EOF(None, None) => break,
+                SyntaxError(None, err_span) | EOF(None, Some(err_span)) => {
+                    let dummy = ParsedCodeBlock::empty(err_span);
+                    maybe_stmt = Some(ParsedStatement::Block(dummy));
+                    maybe_span = Some(err_span);
+                    maybe_err_span = Some(err_span);
+
+                    success = false;
+                    break;
+                },
+                SyntaxError(Some(t), err_span) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::Block(t));
+                    maybe_err_span = Some(err_span);
+
+                    success = false;
+                    break;
+                },
+                EOF(Some(t), efo_maybe_span) => {
+                    maybe_span = Some(t.span);
+                    maybe_stmt = Some(ParsedStatement::Block(t));
+                    maybe_err_span = efo_maybe_span;
+
+                    success = false;
+                    break;
+                },
+            }
+
+            // TODO: Check for other types of statements
+
+            break;
         }
-
-        // 1. Check if there is a variable definition
-        else if let Some(defn) = self.parse_variable_definition() {
-            maybe_span = Some(defn.span);
-            maybe_stmt = Some(ParsedStatement::VariableDefinition(defn));
-
-            needs_semicolon = true;
-        }
-
-        // 2. Check if there is an if statement
-        else if let Some(if_stmt) = self.parse_if_statement() {
-            maybe_span = Some(if_stmt.span);
-            maybe_stmt = Some(ParsedStatement::IfStatement(if_stmt));
-
-            needs_semicolon = false;
-        }
-
-        // 3. Check if there is a code block
-        else if let Some(block) = self.parse_code_block() {
-            maybe_span = Some(block.span);
-            maybe_stmt = Some(ParsedStatement::Block(block));
-
-            needs_semicolon = false;
-        }
-
-        // TODO: Check for other types of statements
 
         // We now still expect a semicolon
         if maybe_span.is_none() {
             maybe_span = Some(start_span);
         }
 
-        if maybe_stmt.is_none() {
-            return None;
+        let span = maybe_span.unwrap();
+
+        if success && maybe_stmt.is_none() {
+            return WrongType;
         }
+
+        if !success && maybe_stmt.is_none() {
+            // this should probably not even happen
+            return if self.eof() {
+                EOF(None, Some(span))
+            } else {
+                SyntaxError(None, span)
+            };
+        }
+
+        let stmt = maybe_stmt.unwrap();
 
         if needs_semicolon {
             if !matches!(self.token(), Some(Semicolon(_))) {
@@ -680,66 +961,123 @@ impl<'src> Parser<'src> {
                     maybe_span.unwrap().after(),
                 ));
 
-                return None;
+                success = false;
             } else {
                 self.inc();
             }
         }
 
-        maybe_stmt
+        if success {
+            Success(stmt)
+        } else if self.eof() {
+            EOF(Some(stmt), maybe_err_span)
+        } else {
+            SyntaxError(Some(stmt), maybe_err_span.unwrap_or(span))
+        }
     }
 
-    fn parse_if_statement(&mut self) -> Option<ParsedIfStatement<'src>> {
+    fn parse_if_statement(&mut self) -> ParsingResult<ParsedIfStatement<'src>> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         use Token::*;
 
         // 1. `if` keyword
         if !matches!(self.token().unwrap(), If(_)) {
-            return None;
+            return WrongType;
         }
 
         let mut total_span = self.span();
+        let mut success = true;
 
-        if !self.expect_inc() {
-            return None;
-        }
+        let mut maybe_err_span: Option<Span> = None;
+
+        self.inc();
 
         // 2. Condition expression
-        let cond = self.parse_expression();
+        let mut has_cond = true;
+        let cond = match self.parse_expression() {
+            Success(t) => t,
+            WrongType | EOF(None, None) => {
+                success = false;
+                has_cond = false;
+                maybe_err_span = Some(total_span.after());
 
-        if cond.is_none() {
+                self.junk_expr(Some(total_span.after()))
+            },
+            EOF(None, Some(err_span)) | SyntaxError(None, err_span) => {
+                success = false;
+                has_cond = false;
+                maybe_err_span = Some(err_span);
+
+                self.junk_expr(Some(total_span.after()))
+            },
+            SyntaxError(Some(t), err_span) | EOF(Some(t), Some(err_span)) => {
+                success = false;
+                maybe_err_span = Some(err_span);
+
+                t
+            },
+            EOF(Some(t), None) => {
+                success = false;
+                maybe_err_span = Some(total_span.after());
+
+                t
+            },
+        };
+
+        if !has_cond {
             self.errors.push(Error::WithHint(
-                "If statement lacks condition expression.".into(),
+                "If statement misses condition expression.".into(),
                 total_span,
                 "Expected boolean expression here.".into(),
                 total_span.after(),
             ));
-
-            return None;
         }
-
-        let cond = cond.unwrap();
 
         total_span.merge_into(self.expr_span(cond));
 
         // 3. Code block
-        let block = self.parse_code_block();
+        let mut has_code_block = true;
+        let block = match self.parse_code_block() {
+            Success(t) => t,
+            WrongType | EOF(None, None) => {
+                success = false;
+                has_code_block = false;
+                maybe_err_span = Some(total_span.after());
 
-        if block.is_none() {
+                ParsedCodeBlock::empty(total_span.after())
+            },
+            EOF(None, Some(err_span)) | SyntaxError(None, err_span) => {
+                success = false;
+                has_code_block = false;
+                maybe_err_span = Some(err_span);
+
+                ParsedCodeBlock::empty(total_span.after())
+            },
+            SyntaxError(Some(t), err_span) | EOF(Some(t), Some(err_span)) => {
+                success = false;
+                maybe_err_span = Some(err_span);
+
+                t
+            },
+            EOF(Some(t), None) => {
+                success = false;
+                maybe_err_span = Some(total_span.after());
+
+                t
+            },
+        };
+
+        if !has_code_block {
             self.errors.push(Error::WithHint(
-                "If statement lacks then block.".into(),
+                "If statement misses then block.".into(),
                 total_span,
                 "If statements need to be of the form `if condition { ... }`".into(),
                 total_span.after(),
             ));
-
-            return None;
         }
-
-        let block = block.unwrap();
 
         total_span.merge_into(block.span);
 
@@ -748,67 +1086,122 @@ impl<'src> Parser<'src> {
             let else_span = self.token().unwrap().span();
             self.inc();
 
-            let if_stmt = self.parse_if_statement();
+            let if_stmt = match self.parse_if_statement() {
+                Success(t) => Some(t),
+                WrongType | EOF(None, None) => None,
+                SyntaxError(Some(t), err_span) | EOF(Some(t), Some(err_span)) => {
+                    success = false;
+
+                    Some(t)
+                },
+                EOF(Some(t), None) => {
+                    success = false;
+
+                    maybe_err_span = Some(total_span.after());
+
+                    Some(t)
+                },
+                SyntaxError(None, err_span) | EOF(None, Some(err_span)) => {
+                    success = false;
+
+                    maybe_err_span = Some(err_span);
+
+                    Some(ParsedIfStatement {
+                        condition: self.junk_expr(Some(err_span)),
+                        then_block: ParsedCodeBlock::empty(err_span),
+                        else_statment: None,
+                        span: err_span,
+                    })
+                },
+            };
 
             if if_stmt.is_some() {
                 Some(ParsedElseStatement::Conditional(Box::new(if_stmt.unwrap()), else_span))
             } else {
-                let code_block = self.parse_code_block();
+                let block = match self.parse_code_block() {
+                    Success(t) => t,
+                    WrongType | EOF(None, None) => {
+                        success = false;
+                        has_code_block = false;
+                        maybe_err_span = Some(total_span.after());
 
-                if code_block.is_none() {
-                    self.errors.push(Error::WithHint(
-                        "Else statement lacks then block.".into(),
-                        else_span,
-                        "Expected code block or another if statement here.".into(),
-                        else_span.after(),
-                    ));
+                        ParsedCodeBlock::empty(total_span.after())
+                    },
+                    EOF(None, Some(err_span)) | SyntaxError(None, err_span) => {
+                        success = false;
+                        has_code_block = false;
+                        maybe_err_span = Some(err_span);
 
-                    return None;
-                }
+                        ParsedCodeBlock::empty(total_span.after())
+                    },
+                    SyntaxError(Some(t), err_span) | EOF(Some(t), Some(err_span)) => {
+                        success = false;
+                        maybe_err_span = Some(err_span);
 
-                let code_block = code_block.unwrap();
+                        t
+                    },
+                    EOF(Some(t), None) => {
+                        success = false;
+                        maybe_err_span = Some(total_span.after());
 
-                Some(ParsedElseStatement::Unconditional(code_block, else_span))
+                        t
+                    },
+                };
+
+                Some(ParsedElseStatement::Unconditional(block, else_span))
             }
         } else {
             None
         };
 
-        Some(ParsedIfStatement {
-            condition: cond,
-            then_block: block,
-            else_statment: else_stmt,
-            span: total_span,
-        })
+        if success {
+            Success(ParsedIfStatement {
+                condition: cond,
+                then_block: block,
+                else_statment: else_stmt,
+                span: total_span,
+            })
+        } else {
+            let dummy = ParsedIfStatement {
+                condition: cond,
+                then_block: block,
+                else_statment: else_stmt,
+                span: total_span,
+            };
+
+            if self.eof() {
+                EOF(Some(dummy), maybe_err_span)
+            } else {
+                SyntaxError(Some(dummy), maybe_err_span.unwrap_or(total_span))
+            }
+        }
     }
 
-    fn parse_variable_definition(&mut self) -> Option<ParsedVariableDefinition<'src>> {
+    fn parse_variable_declaration(&mut self) -> ParsingResult<ParsedVariableDeclaration<'src>> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         use Token::*;
 
         // 1. `let` keyword
         if !matches!(self.token(), Some(Let(_))) {
-            return None;
+            return WrongType;
         }
-
-        let mut success = true;
         let mut total_span = self.token().unwrap().span();
 
-        if !self.expect_inc() {
-            return None;
-        }
+        self.inc();
+
+        let mut success = true;
+
+        let mut maybe_err_span: Option<Span> = None;
 
         // 2. `mut` keyword?
         let (mutability, mutable_span) = if let Some(&Mut(span)) = self.token() {
 
-            if !self.expect_inc() {
-                return None;
-            }
+            self.inc();
 
-            total_span = total_span.merge(span);
+            total_span.merge_into(span);
 
             (Mutability::Mutable, Some(span))
         } else {
@@ -817,26 +1210,82 @@ impl<'src> Parser<'src> {
 
         // 3. Identifier
         let (var_name, var_name_span) = if let Some(&Identifier(name, span)) = self.token() {
-            total_span = total_span.merge(span);
+            total_span.merge_into(span);
 
             (Some(name), Some(span))
         } else {
-            // At this point we do not want to return None, since we already had a `let` keyword.
+            // At this point we do not want to return WrongType, since we already had a `let` keyword.
             // So this clearly is a variable assignment, if an incorrect one.
             success = false;
+
+            self.errors.push(Error::WithHint(
+                "Variable definition misses variable identifier.".into(),
+                total_span,
+                "Expected variable name here.".into(),
+                total_span.after(),
+            ));
+
+            maybe_err_span = Some(total_span.after());
+
             (None, None)
         };
 
-        if !self.expect_inc() {
-            return None;
-        }
+        self.inc();
 
         // TODO: 4. Type hint?
 
         // 5. Assignment equal sign
+        let mut has_equal_sign = true;
+        let mut has_assignment = true;
         if !matches!(self.token(), Some(Equals(_))) {
+            has_equal_sign = false;
+
+            maybe_err_span = Some(total_span.after());
+
+            success = false;
+        } else {
+            total_span.merge_into(self.token().unwrap().span());
+        }
+
+
+        self.inc();
+
+        // 6. Assignment value expression
+        let value_expression = match self.parse_expression() {
+            Success(t) => t,
+            WrongType | EOF(None, None) => {
+                has_assignment = false;
+                success = false;
+
+                self.junk_expr(Some(total_span.after()))
+            },
+            SyntaxError(None, err_span) | EOF(None, Some(err_span)) => {
+                has_assignment = false;
+                success = false;
+
+                maybe_err_span = Some(err_span);
+
+                self.junk_expr(Some(total_span.after()))
+            },
+            SyntaxError(Some(t), err_span) => {
+                success = false;
+
+                maybe_err_span = Some(err_span);
+
+                t
+            },
+            EOF(Some(t), _) => {
+                success = false;
+
+                t
+            },
+        };
+
+        total_span.merge_into(self.expr_span(value_expression));
+
+        if !has_assignment {
             self.errors.push(Error::WithHint(
-                "Variable definition requires assignment!".into(),
+                "Variable declaration misses value assignment.".into(),
                 total_span,
                 format!(
                     "Add a value assignment `let {}{} = value;`.",
@@ -845,90 +1294,172 @@ impl<'src> Parser<'src> {
                 ),
                 total_span.after(),
             ));
-
-            success = false;
-        } else {
-            self.inc();
+        } else if !has_equal_sign {
+            self.errors.push(Error::WithHint(
+                "Value assignment requires an equal sign.".into(),
+                total_span,
+                format!(
+                    "Value assignments should look as follows `let {}{} = value;`.",
+                    if mutable_span.is_some() { "mut " } else { "" },
+                    if var_name.is_some() { var_name.unwrap() } else { "foo" },
+                ),
+                total_span.after(),
+            ));
         }
 
-        // 6. Assignment value expression
-        let value_expression = self.parse_expression();
-        success &= value_expression.is_some();
-
         if success {
-            Some(ParsedVariableDefinition{
+            Success(ParsedVariableDeclaration {
                 name: var_name.unwrap(),
                 name_span: var_name_span.unwrap(),
                 type_name: None,
                 type_span: None,
                 mutability,
                 mutability_span: mutable_span,
-                initial_value: value_expression.unwrap(),
+                initial_value: value_expression,
                 span: total_span,
             })
         } else {
-            None
+
+            // See if we can create a dummy ParsedVariableDeclaration
+            let dummy_value = if var_name.is_some() {
+                Some(ParsedVariableDeclaration {
+                    name: var_name.unwrap(),
+                    name_span: var_name_span.unwrap_or(total_span),
+                    type_name: None,
+                    type_span: None,
+                    mutability,
+                    mutability_span: mutable_span,
+                    initial_value: value_expression,
+                    span: total_span,
+                })
+            } else {
+                None
+            };
+
+            if self.eof() {
+                EOF(dummy_value, maybe_err_span)
+            } else {
+                SyntaxError(dummy_value, maybe_err_span.unwrap_or(total_span))
+            }
         }
     }
 
-    fn parse_expression(&mut self) -> Option<ExpressionId> {
+    fn parse_expression(&mut self) -> ParsingResult<ExpressionId> {
         let mut span = self.span();
 
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         let len_atoms_initial = self.expression_atoms.len();
 
+        let mut success = true;
+
+
+        // First expression atom
+        let lhs_atom = match self.parse_expression_atom() {
+            Success(t) => t,
+            WrongType => return WrongType,
+            SyntaxError(Some(t), span) => {
+                success = false;
+
+                t
+            },
+            SyntaxError(None, span) => {
+                success = false;
+
+                self.junk_atom(Some(span))
+            }
+            EOF(Some(t), maybe_err_span) => {
+                self.expressions.push(ParsedExpression::Atom(t, span));
+
+                return EOF(Some(self.current_expr()), maybe_err_span);
+            },
+            EOF(None, maybe_err_span) => return EOF(Some(self.junk_expr(maybe_err_span)), maybe_err_span),
+        };
+
+        span = span.merge(self.atom_span(lhs_atom));
+
+        // Only create tree once we know we have at least one expression atom
         let mut tree: BinaryTree<ExpressionTreeData, _> = BinaryTree::new(|lhs, rhs| {
             use ExpressionTreeData::*;
             match (lhs, rhs) {
                 (Atom(_), _) | (_, Atom(_)) => Ordering::Equal,
-                (ExpressionTreeData::BinOp(lhs), ExpressionTreeData::BinOp(rhs)) => lhs.cmp(&rhs),
+                (BinOp(lhs), BinOp(rhs)) => lhs.cmp(&rhs),
             }
         });
-
-
-        // Next expression atom
-        let lhs_atom = if let Some(atom) = self.parse_expression_atom() {
-            atom
-        } else {
-            return None;
-        };
-
-        span = span.merge(self.atom_span(lhs_atom));
 
         let lhs_data = ExpressionTreeData::Atom(lhs_atom);
         _ = tree.insert_root(lhs_data, Side::Left, None);
 
         loop {
-            // Binary operation
-            let op = self.parse_binary_operator();
+            // Binary operator
 
-            if op.is_none() {
-                break;
-            }
+            let op = match self.parse_binary_operator() {
+                // Successful cases
+                Success(t) => t,
+                WrongType | EOF(None, _) => break,
 
-            let op = op.unwrap();
+                // Unsuccessful cases
+                SyntaxError(Some(t), err_span) => {
+                    success = false;
+
+                    t
+                },
+                SyntaxError(None, err_span) => {
+                    success = false;
+
+                    ParsedOperator::Junk(err_span)
+                },
+                EOF(Some(t), maybe_err_span) => {
+                    // Insert junk rhs
+                    // Add tree data
+                    let op_data = ExpressionTreeData::BinOp(t);
+                    let rhs_atom_data = ExpressionTreeData::Atom(self.junk_atom(Some(span.after())));
+
+                    _ = tree.insert_root(
+                        op_data,
+                        Side::Left,
+                        Some(rhs_atom_data)
+                    );
+
+                    break;
+                },
+            };
+
+            span.merge_into(op.span());
 
             // RHS atom
-            let rhs_atom = self.parse_expression_atom();
+            let rhs_atom = match self.parse_expression_atom() {
+                Success(t) => t,
+                WrongType => {
+                    self.errors.push(Error::WithHint(
+                        "Incomplete expression.".into(),
+                        span,
+                        "Binary operator misses expression to act upon.".into(),
+                        op.span(),
+                    ));
 
-            if rhs_atom.is_none() {
-                self.errors.push(Error::WithHint(
-                    "Incomplete expression.".into(),
-                    span,
-                    "Binary operator lacks expression to act upon.".into(),
-                    op.span(),
-                ));
+                    success = false;
 
-                // drop the newly added atoms
-                self.expression_atoms.truncate(len_atoms_initial);
+                    self.junk_atom(Some(span.after()))
+                },
+                SyntaxError(Some(t), _) | EOF(Some(t), _) => {
+                    success = false;
 
-                return None;
-            }
+                    t
+                },
+                SyntaxError(None, err_span) => {
+                    success = false;
 
-            let rhs_atom = rhs_atom.unwrap();
+                    self.junk_atom(Some(err_span))
+                },
+                EOF(None, maybe_err_span) => {
+                    success = false;
+
+                    self.junk_atom(None)
+                },
+            };
 
             // Add data to tree
 
@@ -1022,14 +1553,14 @@ impl<'src> Parser<'src> {
             parser.current_expr()
         }
 
-        Some(build_expression_tree(self, &tree, tree.root()))
+        Success(build_expression_tree(self, &tree, tree.root()))
     }
 
 
 
-    fn parse_expression_atom(&mut self) -> Option<ExpressionAtomId> {
+    fn parse_expression_atom(&mut self) -> ParsingResult<ExpressionAtomId> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         use Token::*;
@@ -1041,83 +1572,189 @@ impl<'src> Parser<'src> {
 
                 self.expression_atoms.push(IntegerConstant(value, span));
 
-                Some(self.current_expr_atom())
+                Success(self.current_expr_atom())
             },
             BooleanLiteral(value, span) => {
                 self.inc();
 
                 self.expression_atoms.push(BooleanConstant(value, span));
 
-                Some(self.current_expr_atom())
+                Success(self.current_expr_atom())
             },
             Identifier(name, span) => {
-                self.inc();
 
-                let func_invocation = self.parse_function_invocation();
-
-                if func_invocation.is_some() {
-                    return func_invocation;
+                // Check if we actually have a function invocation
+                match self.parse_function_invocation() {
+                    Success(t) => return Success(t),
+                    WrongType => {},
+                    SyntaxError(maybe_t, span) => return SyntaxError(maybe_t, span),
+                    EOF(maybe_t, maybe_span) => return EOF(maybe_t, maybe_span),
                 }
+
+                self.inc();
 
                 // If it's not a function, it's a variable
                 self.expression_atoms.push(Variable(name, span));
 
-                Some(self.current_expr_atom())
+                Success(self.current_expr_atom())
             },
             LParen(mut span) => {
-                if !self.expect_inc() {
-                    return None;
+                if !self.inc() {
+                    self.errors.push(Error::WithHint(
+                        "Expression misses closing parenthesis.".into(),
+                        span,
+                        "This open parenthesis misses a closing partner.".into(),
+                        span,
+                    ));
+
+                    self.expression_atoms.push(ParsedExpressionAtom::Unit(span));
+
+                    return EOF(Some(self.current_expr_atom()), Some(span));
                 }
+
+                let lparen_span = span;
 
                 let expr = self.parse_expression();
 
+                let expr_span = match expr {
+                    Success(t) => self.expr_span(t),
+                    WrongType => span,
+                    SyntaxError(_, sp) => sp,
+                    EOF(_, Some(sp)) => sp,
+                    _ => self.span(),
+                };
+
+                span.merge_into(expr_span);
+
                 if !matches!(self.token(), Some(RParen(_))) {
-                    return None;
+                    self.errors.push(Error::WithHint(
+                        "Expression misses closing parenthesis.".into(),
+                        span,
+                        "This open parenthesis misses a closing partner.".into(),
+                        lparen_span,
+                    ));
+
+                    let atom = match expr.to_opt() {
+                        Some(t) => ParsedExpressionAtom::EnclosedExpression(t, span),
+                        None => ParsedExpressionAtom::Junk(span),
+                    };
+
+                    self.expression_atoms.push(atom);
+
+                    let atom = self.current_expr_atom();
+
+                    return match expr {
+                        EOF(_, _) => EOF(Some(atom), Some(span)),
+                        _ => SyntaxError(Some(atom), span),
+                    };
                 }
 
                 span = span.merge(self.span());
 
                 self.inc();
 
-                if expr.is_some() {
-                    self.expression_atoms.push(EnclosedExpression(expr.unwrap(), span));
-                } else {
-                    self.expression_atoms.push(Unit(span));
-                }
+                match expr {
+                    Success(t) => {
+                        self.expression_atoms.push(EnclosedExpression(t, span));
 
-                Some(self.current_expr_atom())
+                        Success(self.current_expr_atom())
+                    },
+                    WrongType => {
+                        self.expression_atoms.push(Unit(span));
+
+                        Success(self.current_expr_atom())
+                    },
+                    SyntaxError(Some(t), err_span) => {
+                        self.expression_atoms.push(EnclosedExpression(t, span));
+
+                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                    },
+                    SyntaxError(None, err_span) => {
+                        self.expression_atoms.push(Unit(span));
+
+                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                    },
+                    EOF(Some(t), maybe_err_span) => {
+                        self.expression_atoms.push(EnclosedExpression(t, span));
+
+                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                    },
+                    EOF(None, maybe_err_span) => {
+                        self.expression_atoms.push(Unit(span));
+
+                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                    },
+                }
             },
             // TODO: Precedence considering prefix and suffix operators
-            _ if let Some(op) = self.parse_unary_prefix_operator() => {
-                let atom = self.parse_expression_atom();
+            _ if let Success(op) = self.parse_unary_prefix_operator() => {
+                match self.parse_expression_atom() {
+                    Success(t) => {
+                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                            op,
+                            t,
+                            op.span().merge(self.atom_span(t))
+                        ));
 
-                if atom.is_none() {
+                        Success(self.current_expr_atom())
+                    },
+                    WrongType => {
+                        let junk = self.junk_atom(Some(op.span().after()));
+                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                            op,
+                            junk,
+                            op.span()
+                        ));
 
-                    self.errors.push(Error::WithHint(
-                        "Incomplete expression.".into(),
-                        op.span(),
-                        "Unary operator lacks expression atom to act upon.".into(),
-                        op.span(),
-                    ));
+                        SyntaxError(Some(self.current_expr_atom()), op.span().after())
+                    },
+                    SyntaxError(Some(t), err_span) => {
+                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                            op,
+                            t,
+                            op.span().merge(self.atom_span(t))
+                        ));
 
-                    return None;
+                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                    },
+                    SyntaxError(None, err_span) => {
+                        let junk = self.junk_atom(Some(op.span().after()));
+                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                            op,
+                            junk,
+                            op.span()
+                        ));
+
+                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                    },
+                    EOF(Some(t), maybe_err_span) => {
+                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                            op,
+                            t,
+                            op.span().merge(self.atom_span(t))
+                        ));
+
+                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                    },
+                    EOF(None, maybe_err_span) => {
+                        let junk = self.junk_atom(Some(op.span().after()));
+                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                            op,
+                            junk,
+                            op.span()
+                        ));
+
+                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                    },
                 }
-
-                let atom = atom.unwrap();
-
-                let span = op.span().merge(self.atom_span(atom));
-
-                self.expression_atoms.push(UnaryPrefixedAtom(op, atom, span));
-
-                Some(self.current_expr_atom())
             },
-            _ => None,
+            _ => WrongType,
         }
     }
 
-    fn parse_function_invocation(&mut self) -> Option<ExpressionAtomId> {
+    fn parse_function_invocation(&mut self) -> ParsingResult<ExpressionAtomId> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         let initial_index = self.token_index;
@@ -1128,18 +1765,20 @@ impl<'src> Parser<'src> {
         let (name, name_span) = if let Some(&Identifier(name, span)) = self.token() {
             (name, span)
         } else {
-            return None;
+            return WrongType;
         };
 
 
         let mut span = name_span;
+        let mut success = true;
+        let mut error_span = name_span;
 
         self.inc();
 
         // 2. Open parenthesis
         if !matches!(self.token(), Some(LParen(_))) {
             self.token_index = initial_index;
-            return None;
+            return WrongType;
         }
 
         span.merge_into(self.token().unwrap().span());
@@ -1155,17 +1794,19 @@ impl<'src> Parser<'src> {
             self.token_index = initial_index;
 
             self.errors.push(Error::WithHint(
-                "Function invocation lacks closing parenthesis.".into(),
+                "Function invocation misses closing parenthesis.".into(),
                 span,
                 "Expected `)` here.".into(),
                 span.after(),
             ));
 
-            return None;
-        }
+            error_span = span.after();
 
-        let span = self.token().unwrap().span();
-        self.inc();
+            success = false;
+        } else {
+            span.merge_into(self.token().unwrap().span());
+            self.inc();
+        }
 
         self.expression_atoms.push(ParsedExpressionAtom::FunctionInvocation(
             name,
@@ -1173,24 +1814,28 @@ impl<'src> Parser<'src> {
             name_span.merge(span),
         ));
 
-        Some(self.current_expr_atom())
+        if success {
+            Success(self.current_expr_atom())
+        } else {
+            SyntaxError(Some(self.current_expr_atom()), error_span)
+        }
     }
 
-    fn parse_unary_prefix_operator(&mut self) -> Option<ParsedOperator> {
+    fn parse_unary_prefix_operator(&mut self) -> ParsingResult<ParsedOperator> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         use Token::*;
         use ParsedOperator::*;
 
         let op = match self.token().unwrap() {
-            &Plus(span) => Some(UnaryPlus(span)),
-            &Minus(span) => Some(UnaryMinus(span)),
-            &Asterisk(span) => Some(UnaryDereference(span)),
-            &Not(span) => Some(UnaryLogicalNot(span)),
-            &Ampersand(span) => Some(UnaryReference(span)),
-            _ => None,
+            &Plus(span) => Success(UnaryPlus(span)),
+            &Minus(span) => Success(UnaryMinus(span)),
+            &Asterisk(span) => Success(UnaryDereference(span)),
+            &Not(span) => Success(UnaryLogicalNot(span)),
+            &Ampersand(span) => Success(UnaryReference(span)),
+            _ => WrongType,
         };
 
         if op.is_some() {
@@ -1200,24 +1845,24 @@ impl<'src> Parser<'src> {
         op
     }
 
-    fn parse_binary_operator(&mut self) -> Option<ParsedOperator> {
+    fn parse_binary_operator(&mut self) -> ParsingResult<ParsedOperator> {
         if !self.has_token() {
-            return None;
+            return EOF(None, None);
         }
 
         use Token::*;
         use ParsedOperator::*;
 
         let op = match *self.token().unwrap() {
-            Plus(span) => Some(BinaryAddition(span)),
-            Minus(span) => Some(BinaryMultiplication(span)),
-            Asterisk(span) => Some(BinaryMultiplication(span)),
-            Slash(span) => Some(BinaryDivision(span)),
-            Percent(span) => Some(BinaryModulo(span)),
-            And(span) => Some(BinaryLogicalAnd(span)),
-            Or(span) => Some(BinaryLogicalOr(span)),
-            Xor(span) => Some(BinaryLogicalXor(span)),
-            _ => None,
+            Plus(span) => Success(BinaryAddition(span)),
+            Minus(span) => Success(BinaryMultiplication(span)),
+            Asterisk(span) => Success(BinaryMultiplication(span)),
+            Slash(span) => Success(BinaryDivision(span)),
+            Percent(span) => Success(BinaryModulo(span)),
+            And(span) => Success(BinaryLogicalAnd(span)),
+            Or(span) => Success(BinaryLogicalOr(span)),
+            Xor(span) => Success(BinaryLogicalXor(span)),
+            _ => WrongType,
         };
 
         if op.is_some() {
@@ -1237,3 +1882,70 @@ enum ExpressionTreeData {
     Atom(ExpressionAtomId),
     BinOp(ParsedOperator),
 }
+
+#[derive(Clone, Debug)]
+enum ParsingResult<T: Clone + Debug> {
+    Success(T),
+    WrongType,
+
+    /// Indicates that the function found the requested object, but encountered a syntactical error.
+    ///
+    /// A function returning `SyntaxError` guarantees that it has already raised an error.
+    ///
+    /// It will contain Junk elements wherever necessary.
+    SyntaxError(Option<T>, Span),
+
+    /// Indicated that the function found the requested object, but encountered the end of the source before it could finish parsing.
+    ///
+    /// A function returning `SyntaxError` guarantees that it has already raised an error.
+    ///
+    /// It will contain Junk elements wherever necessary.
+    EOF(Option<T>, Option<Span>),
+}
+
+impl<T: Clone + Debug> ParsingResult<T> {
+    fn is_some(&self) -> bool {
+        matches!(self, Success(_))
+    }
+
+    fn is_none(&self) -> bool {
+        !self.is_some()
+    }
+
+    fn unwrap(self) -> T {
+        match self {
+            Success(t) => t,
+            SyntaxError(maybe_t, _) => maybe_t.unwrap(),
+            _ => panic!("Unwrapped ParsingResult that did not contain a value!"),
+        }
+    }
+
+    fn span(&self) -> Option<Span> {
+        match self {
+            &SyntaxError(_, span) => Some(span),
+            &EOF(_, maybe_span) => maybe_span,
+            _ => None,
+        }
+    }
+
+    fn is_eof(&self) -> bool {
+        matches!(self, EOF(_, _))
+    }
+
+    fn to_opt(self) -> Option<T> {
+        self.into()
+    }
+}
+
+impl<T: Clone + Debug> Into<Option<T>> for ParsingResult<T> {
+    fn into(self) -> Option<T> {
+        match self {
+            Success(t) => Some(t),
+            SyntaxError(maybe_t, _) => maybe_t,
+            EOF(maybe_t, _) => maybe_t,
+            _ => None,
+        }
+    }
+}
+
+impl<T: Clone + Copy + Debug> Copy for ParsingResult<T> {}
