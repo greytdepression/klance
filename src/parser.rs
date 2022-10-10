@@ -7,34 +7,34 @@ use crate::datastructure::{BinaryTree, Side};
 
 #[derive(Debug, Clone)]
 pub struct ParsedStruct<'src> {
-    is_file_struct: bool,
-    fields: Vec<ParsedField<'src>>,
-    constants: Vec<ParsedConstantDefinition<'src>>,
-    functions: Vec<ParsedFunction<'src>>,
-    span: Span,
+    pub is_file_struct: bool,
+    pub fields: Vec<ParsedField<'src>>,
+    pub constants: Vec<ParsedConstantDefinition<'src>>,
+    pub functions: Vec<ParsedFunction<'src>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedField<'src> {
-    name: &'src str,
-    name_span: Span,
-    type_name: &'src str,
-    type_span: Span,
-    default_value: Option<ExpressionId>,
-    default_value_span: Option<Span>,
-    visibility: Visibility,
-    visibility_span: Span,
-    span: Span,
+    pub name: &'src str,
+    pub name_span: Span,
+    pub type_name: &'src str,
+    pub type_span: Span,
+    pub default_value: Option<ExpressionId>,
+    pub default_value_span: Option<Span>,
+    pub visibility: Visibility,
+    pub visibility_span: Span,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedConstantDefinition<'src> {
-    name: &'src str,
-    name_span: Span,
-    type_name: &'src str,
-    type_span: Span,
-    value: ParsedComptimeExpression<'src>,
-    span: Span,
+    pub name: &'src str,
+    pub name_span: Span,
+    pub type_name: &'src str,
+    pub type_span: Span,
+    pub value: ParsedComptimeExpression<'src>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -44,30 +44,30 @@ pub enum ParsedComptimeExpression<'src> {
 
 #[derive(Debug, Clone)]
 pub struct ParsedFunction<'src> {
-    name: &'src str,
-    name_span: Span,
-    parameters: Vec<ParsedParameter<'src>>,
-    return_type_name: Option<&'src str>,
-    return_type_span: Option<Span>,
-    throws: bool,
-    error_type_name: Option<&'src str>,
-    error_type_span: Option<Span>,
-    visibility: Visibility,
-    code_block: ParsedCodeBlock<'src>,
-    span: Span,
+    pub name: &'src str,
+    pub name_span: Span,
+    pub parameters: Vec<ParsedParameter<'src>>,
+    pub return_type_name: Option<&'src str>,
+    pub return_type_span: Option<Span>,
+    pub throws: bool,
+    pub error_type_name: Option<&'src str>,
+    pub error_type_span: Option<Span>,
+    pub visibility: Visibility,
+    pub code_block: ParsedCodeBlock<'src>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParsedParameter<'src> {
-    name: &'src str,
-    name_span: Span,
-    type_name: &'src str,
-    type_span: Span,
-    default_value: Option<ExpressionId>,
-    default_value_span: Option<Span>,
-    anonymity: Anonymity,
-    anonymity_span: Span,
-    span: Span,
+    pub name: &'src str,
+    pub name_span: Span,
+    pub type_name: &'src str,
+    pub type_span: Span,
+    pub default_value: Option<ExpressionId>,
+    pub default_value_span: Option<Span>,
+    pub anonymity: Anonymity,
+    pub anonymity_span: Span,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -84,8 +84,8 @@ pub enum Anonymity {
 
 #[derive(Debug, Clone)]
 pub struct ParsedCodeBlock<'src> {
-    statements: Vec<ParsedStatement<'src>>,
-    span: Span,
+    pub statements: Vec<ParsedStatement<'src>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +95,7 @@ pub enum ParsedStatement<'src> {
     VariableDefinition(ParsedVariableDefinition<'src>),
     ConstantDefinition(ParsedConstantDefinition<'src>),
     IfStatement(ParsedIfStatement<'src>),
-    Block(ParsedCodeBlock<'src>)
+    Block(ParsedCodeBlock<'src>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -106,10 +106,10 @@ pub enum HasSemicolon {
 
 #[derive(Debug, Clone)]
 pub struct ParsedIfStatement<'src> {
-    condition: ExpressionId,
-    then_block: ParsedCodeBlock<'src>,
-    else_statment: Option<ParsedElseStatement<'src>>,
-    span: Span,
+    pub condition: ExpressionId,
+    pub then_block: ParsedCodeBlock<'src>,
+    pub else_statment: Option<ParsedElseStatement<'src>>,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -120,14 +120,14 @@ pub enum ParsedElseStatement<'src> {
 
 #[derive(Debug, Clone)]
 pub struct ParsedVariableDefinition<'src> {
-    name: &'src str,
-    name_span: Span,
-    type_name: Option<&'src str>,
-    type_span: Option<Span>,
-    mutability: Mutability,
-    mutability_span: Option<Span>,
-    initial_value: ExpressionId,
-    span: Span,
+    pub name: &'src str,
+    pub name_span: Span,
+    pub type_name: Option<&'src str>,
+    pub type_span: Option<Span>,
+    pub mutability: Mutability,
+    pub mutability_span: Option<Span>,
+    pub initial_value: ExpressionId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -316,13 +316,13 @@ impl ParsedOperator {
 //--------------------------------------------------
 
 pub struct Parser<'src> {
-    tokens: Vec<Token<'src>>,
-    token_index: usize,
-    errors: Vec<Error>,
+    pub tokens: Vec<Token<'src>>,
+    pub token_index: usize,
+    pub errors: Vec<Error>,
 
     // data
-    expressions: Vec<ParsedExpression>,
-    expression_atoms: Vec<ParsedExpressionAtom<'src>>,
+    pub expressions: Vec<ParsedExpression>,
+    pub expression_atoms: Vec<ParsedExpressionAtom<'src>>,
 }
 
 #[derive(Debug, Clone, Copy)]
