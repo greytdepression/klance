@@ -16,20 +16,17 @@ fn main() {
 
     let tokens = lexer.lex();
 
-    println!("{}", source);
     for tk in &tokens {
         println!("{:?}", tk);
     }
 
-    println!("\n\nParsing token stream!\n\n");
+    println!("\n\n{}", source);
 
     let mut parser = Parser::new(tokens);
 
     let parsed_struct = parser.parse();
 
-    for error in parser.errors() {
-        println!("{:?}", error);
-    }
+    util::print_errors(source, parser.errors());
 
-    println!("{:?}", parsed_struct);
+    println!("\n\n{:?}", parsed_struct);
 }

@@ -1,3 +1,7 @@
+use std::cmp::max;
+
+use colored::Colorize;
+
 
 
 
@@ -16,6 +20,97 @@ pub enum Error {
     Error(String, Span),
     WithHint(String, Span, String, Span),
 }
+
+pub fn print_errors(source: &str, errors: &Vec<Error>) {
+    let lines = find_lines(source);
+
+    if errors.is_empty() {
+        println!("No errors o.o");
+        return;
+    }
+
+    let max_line_number = errors.iter()
+        .map(|e| {
+            match e {
+                Error::Error(_, span) => span.start_line,
+                Error::WithHint(_, span, _, hint_span) => max(span.start_line, hint_span.start_line),
+            }
+        })
+        .max()
+        .unwrap();
+
+    for error in errors {
+        match error {
+            Error::Error(msg, span) => {
+                println!("{}: {}", "Error".red().bold(), msg.bold());
+                println!("{}", format!("  --> {}:{}:{}", "samples/test1.klc", span.start_line, span.start_column).cyan());
+                print_line(source, &lines, *span, max_line_number);
+                println!("");
+            },
+            Error::WithHint(msg, span, hint_msg, hint_span) => {
+                println!("{}: {}", "Error".red().bold(), msg.bold());
+                println!("{}", format!("  --> {}:{}:{}", "samples/test1.klc", span.start_line, span.start_column).cyan());
+                print_line(source, &lines, *span, max_line_number);
+
+                println!("{}: {}", "Hint".yellow(), hint_msg);
+                println!("{}", format!("  --> {}:{}:{}", "samples/test1.klc", hint_span.start_line, hint_span.start_column).cyan());
+                print_line(source, &lines, *hint_span, max_line_number);
+                println!("");
+            },
+        }
+    }
+}
+
+fn find_lines(source: &str) -> Vec<usize> {
+    let mut lines = vec![0];
+
+    for (index, &char) in source.as_bytes().iter().enumerate() {
+        if char == b'\n' {
+            lines.push(index+1);
+        }
+    }
+
+    lines.push(source.len());
+
+    lines
+}
+
+// Lines start at index 1
+fn print_line(source: &str, lines: &Vec<usize>, span: Span, max_line_number: usize) {
+    let buffer = max_line_number.to_string().len();
+
+    let line = span.start_line;
+    let column = span.start_column;
+
+    let line_number_str = line.to_string();
+    let prefix_len = 1 + buffer - line_number_str.len();
+
+    let prefix = " ".repeat(prefix_len);
+
+    let empty_line_number = " ".repeat(1 + buffer + 1);
+
+    println!("{}|", &empty_line_number);
+    println!("{}{} | {}", prefix, line_number_str, &source[lines[line - 1]..lines[line]-1]);
+
+    let prefix_columns = " ".repeat(column - 1);
+
+    let mut span_len = if span.start_line == span.end_line {
+        span.end_column - span.start_column
+    } else {
+        lines[line] - lines[line - 1] - 1 - span.start_column
+    };
+
+    if span_len == 0 {
+        span_len = 1;
+    }
+
+    let underline = "^".repeat(span_len);
+    if line + 1 < lines.len() {
+        println!("{}| {}{}", &empty_line_number, prefix_columns, underline.red());
+    }
+}
+
+
 
 //--------------------------------------------------
 // Implementations
