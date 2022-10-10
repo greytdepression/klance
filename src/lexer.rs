@@ -148,10 +148,28 @@ impl<'src> Lexer<'src> {
     }
 
     fn inc_index(&mut self) {
-        if self.char_index < self.source_len {
+        let mut done = false;
+
+        while self.char_index < self.source_len && self.char() == '\n' {
+            self.column_index = 1;
+            self.line_index += 1;
+            self.byte_index += self.char().len_utf8();
+            self.char_index += 1;
+
+            done = true;
+        }
+
+        if !done && self.char_index < self.source_len {
             self.byte_index += self.char().len_utf8();
             self.char_index += 1;
             self.column_index += 1;
+        }
+
+        while self.char_index < self.source_len && self.char() == '\n' {
+            self.column_index = 1;
+            self.line_index += 1;
+            self.byte_index += self.char().len_utf8();
+            self.char_index += 1;
         }
     }
 
@@ -161,15 +179,8 @@ impl<'src> Lexer<'src> {
         assert!(self.source_len == self.source_chars.len());
 
         while self.char_index < self.source_len {
-            if self.char().is_whitespace() {
-
-                if self.char() == '\n' {
-                    self.line_index += 1;
-                    self.column_index = 1;
-                }
-
+            while self.char().is_whitespace() {
                 self.inc_index();
-                continue;
             }
 
             let prev_index = self.char_index;
