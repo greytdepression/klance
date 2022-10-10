@@ -171,6 +171,7 @@ pub enum ParsedExpressionAtom<'src> {
     EnclosedExpression(ExpressionId, Span),
     UnaryPrefixedAtom(ParsedOperator, ExpressionAtomId, Span),
     Variable(&'src str, Span),
+    FunctionInvocation(&'src str, (), Span), //    pub TODO: add parameter type
 }
 
 impl<'src> ParsedExpressionAtom<'src> {
@@ -182,7 +183,8 @@ impl<'src> ParsedExpressionAtom<'src> {
             BooleanConstant(_, span) |
             EnclosedExpression(_, span) |
             UnaryPrefixedAtom(_, _, span) |
-            Variable(_, span) => *span,
+            Variable(_, span) |
+            FunctionInvocation(_, _, span) => *span,
         }
     }
 
@@ -195,6 +197,7 @@ impl<'src> ParsedExpressionAtom<'src> {
             EnclosedExpression(expr, _) => format!("({})", parser.get_expr(*expr).to_string(parser)),
             UnaryPrefixedAtom(op, atom, _) => format!("({}{})", op.to_string(), parser.get_atom(*atom).to_string(parser)),
             &Variable(identifier, _) => String::from(identifier),
+            &FunctionInvocation(name, _, _) => format!("{}()", name),
         }
     }
 }
@@ -1050,8 +1053,13 @@ impl<'src> Parser<'src> {
             Identifier(name, span) => {
                 self.inc();
 
-                // TODO: Check if followed by `()`, because then it should be a function invocation.
+                let func_invocation = self.parse_function_invocation();
 
+                if func_invocation.is_some() {
+                    return func_invocation;
+                }
+
+                // If it's not a function, it's a variable
                 self.expression_atoms.push(Variable(name, span));
 
                 Some(self.current_expr_atom())
@@ -1105,6 +1113,67 @@ impl<'src> Parser<'src> {
             },
             _ => None,
         }
+    }
+
+    fn parse_function_invocation(&mut self) -> Option<ExpressionAtomId> {
+        if !self.has_token() {
+            return None;
+        }
+
+        let initial_index = self.token_index;
+
+        use Token::*;
+
+        // 1. Identifier
+        let (name, name_span) = if let Some(&Identifier(name, span)) = self.token() {
+            (name, span)
+        } else {
+            return None;
+        };
+
+
+        let mut span = name_span;
+
+        self.inc();
+
+        // 2. Open parenthesis
+        if !matches!(self.token(), Some(LParen(_))) {
+            self.token_index = initial_index;
+            return None;
+        }
+
+        span.merge_into(self.token().unwrap().span());
+
+        self.inc();
+
+
+
+        // TODO: 3. Parameters?
+
+        // 4. Closing parenthesis
+        if !matches!(self.token(), Some(RParen(_))) {
+            self.token_index = initial_index;
+
+            self.errors.push(Error::WithHint(
+                "Function invocation lacks closing parenthesis.".into(),
+                span,
+                "Expected `)` here.".into(),
+                span.after(),
+            ));
+
+            return None;
+        }
+
+        let span = self.token().unwrap().span();
+        self.inc();
+
+        self.expression_atoms.push(ParsedExpressionAtom::FunctionInvocation(
+            name,
+            (),
+            name_span.merge(span),
+        ));
+
+        Some(self.current_expr_atom())
     }
 
     fn parse_unary_prefix_operator(&mut self) -> Option<ParsedOperator> {
