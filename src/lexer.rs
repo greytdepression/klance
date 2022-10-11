@@ -47,11 +47,15 @@ pub struct Lexer<'src> {
     source: &'src str,
     source_chars: Vec<char>,
     char_index: usize,
+    last_char_index: usize,
     byte_index: usize,
+    last_byte_index: usize,
     line_index: usize,
     column_index: usize,
     source_len: usize,
     errors: Vec<Error>,
+    current_span: Span,
+    last_span: Span,
 }
 
 // Implementations
@@ -105,28 +109,44 @@ impl<'src> Lexer<'src> {
             source,
             source_chars: chars,
             char_index: 0,
+            last_char_index: 0,
             byte_index: 0,
+            last_byte_index: 0,
             line_index: 1,
             column_index: 1,
             source_len: num_chars,
             errors: Vec::new(),
+            current_span: Span::default(),
+            last_span: Span::default(),
         }
+    }
+
+    fn byte_index(&self) -> usize {
+        self.byte_index
+    }
+
+    fn last_byte_index(&self) -> usize {
+        self.last_byte_index
+    }
+
+    fn last_byte_end(&self) -> usize {
+        self.last_byte_index + self.source_chars[self.last_char_index].len_utf8()
+    }
+
+    fn char_index(&self) -> usize {
+        self.char_index
+    }
+
+    fn last_char_index(&self) -> usize {
+        self.last_char_index
     }
 
     fn span(&self) -> Span {
-        Span {
-            start: self.char_index,
-            end: self.char_index + 1,
-            after: false,
-        }
+        self.current_span
     }
 
-    fn span_excl(&self) -> Span {
-        Span {
-            start: self.char_index,
-            end: self.char_index,
-            after: false,
-        }
+    fn last_span(&self) -> Span {
+        self.last_span
     }
 
     fn char(&self) -> char {
@@ -141,29 +161,39 @@ impl<'src> Lexer<'src> {
         }
     }
 
-    fn inc_index(&mut self) {
-        let mut done = false;
-
+    fn skip_newlines(&mut self) -> bool {
+        let mut skipped = false;
         while self.char_index < self.source_len && self.char() == '\n' {
             self.column_index = 1;
             self.line_index += 1;
             self.byte_index += self.char().len_utf8();
             self.char_index += 1;
 
-            done = true;
+            skipped = true;
         }
 
-        if !done && self.char_index < self.source_len {
+        skipped
+    }
+
+    fn inc_index(&mut self) {
+        self.last_span = self.current_span;
+        self.last_byte_index = self.byte_index;
+        self.last_char_index = self.char_index;
+
+        let skipped = self.skip_newlines();
+
+        if !skipped && self.char_index < self.source_len {
             self.byte_index += self.char().len_utf8();
             self.char_index += 1;
             self.column_index += 1;
         }
 
-        while self.char_index < self.source_len && self.char() == '\n' {
-            self.column_index = 1;
-            self.line_index += 1;
-            self.byte_index += self.char().len_utf8();
-            self.char_index += 1;
+        _ = self.skip_newlines();
+
+        self.current_span = Span {
+            start: self.char_index,
+            end: self.char_index + 1,
+            after: false,
         }
     }
 
@@ -230,10 +260,10 @@ impl<'src> Lexer<'src> {
         }
 
         let end_byte = self.byte_index;
+        let span = start_span.merge(self.span());
 
         self.inc_index();
 
-        let span = start_span.merge(self.span_excl());
         let string = &self.source[start_byte..end_byte];
 
         Token::StringLiteral(string, span)
@@ -269,14 +299,14 @@ impl<'src> Lexer<'src> {
             '<' => match self.char() {
                 '=' => {
                     self.inc_index();
-                    LessThanOrEqual(span.merge(self.span_excl()))
+                    LessThanOrEqual(span.merge(self.last_span()))
                 },
                 _ => LessThan(span),
             },
             '>' => match self.char() {
                 '=' => {
                     self.inc_index();
-                    GreaterThanOrEqual(span.merge(self.span_excl()))
+                    GreaterThanOrEqual(span.merge(self.last_span()))
                 },
                 _ => GreateThan(span),
             },
@@ -373,8 +403,8 @@ impl<'src> Lexer<'src> {
             self.inc_index();
         }
 
-        let span_end = self.span_excl();
-        let str_end = self.byte_index;
+        let span_end = self.last_span();
+        let str_end = self.last_byte_end();
 
         let string = &self.source[str_start..str_end];
         let span = span_start.merge(span_end);
