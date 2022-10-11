@@ -1,8 +1,6 @@
-use std::{cmp::max, str::Chars};
+use std::cmp::max;
 
 use colored::Colorize;
-
-
 
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -63,7 +61,7 @@ pub fn print_errors(source: &str, errors: &Vec<Error>) {
         match error {
             Error::Error(msg, span) => {
                 println!("{}: {}", "Error".red().bold(), msg.bold());
-                println!("{}", format!("  --> {}:{}", "samples/test1.klc", pos(*span)).cyan());
+                println!("{}", format!("  --> {}:{}", "samples/test1.klc", pos(*span)).cyan()); // FIXME: use actual source location
                 print_line(source, &lines, *span, max_line_number, Color::Red);
                 println!("");
             },
