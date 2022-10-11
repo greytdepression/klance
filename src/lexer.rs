@@ -117,10 +117,7 @@ impl<'src> Lexer<'src> {
         Span {
             start: self.char_index,
             end: self.char_index + 1,
-            start_line: self.line_index,
-            end_line: self.line_index,
-            start_column: self.column_index,
-            end_column: self.column_index + 1,
+            after: false,
         }
     }
 
@@ -128,10 +125,7 @@ impl<'src> Lexer<'src> {
         Span {
             start: self.char_index,
             end: self.char_index,
-            start_line: self.line_index,
-            end_line: self.line_index,
-            start_column: self.column_index,
-            end_column: self.column_index,
+            after: false,
         }
     }
 
