@@ -32,7 +32,7 @@ pub enum Token<'src> {
     Semicolon(Span),
     Colon(Span),
     LessThan(Span),
-    GreateThan(Span),
+    GreaterThan(Span),
     LessThanOrEqual(Span),
     GreaterThanOrEqual(Span),
     Plus(Span),
@@ -84,7 +84,7 @@ impl<'src> Token<'src> {
             Semicolon(span) |
             Colon(span) |
             LessThan(span) |
-            GreateThan(span) |
+            GreaterThan(span) |
             LessThanOrEqual(span) |
             GreaterThanOrEqual(span) |
             Plus(span) |
@@ -278,7 +278,7 @@ impl<'src> Lexer<'src> {
                     self.inc_index();
                     GreaterThanOrEqual(span.merge(self.span_excl()))
                 },
-                _ => GreateThan(span),
+                _ => GreaterThan(span),
             },
             _ => Token::Unknown(span),
         }
