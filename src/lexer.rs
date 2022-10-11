@@ -117,10 +117,7 @@ impl<'src> Lexer<'src> {
         Span {
             start: self.char_index,
             end: self.char_index + 1,
-            start_line: self.line_index,
-            end_line: self.line_index,
-            start_column: self.column_index,
-            end_column: self.column_index + 1,
+            after: false,
         }
     }
 
@@ -128,10 +125,7 @@ impl<'src> Lexer<'src> {
         Span {
             start: self.char_index,
             end: self.char_index,
-            start_line: self.line_index,
-            end_line: self.line_index,
-            start_column: self.column_index,
-            end_column: self.column_index,
+            after: false,
         }
     }
 
@@ -148,10 +142,28 @@ impl<'src> Lexer<'src> {
     }
 
     fn inc_index(&mut self) {
-        if self.char_index < self.source_len {
+        let mut done = false;
+
+        while self.char_index < self.source_len && self.char() == '\n' {
+            self.column_index = 1;
+            self.line_index += 1;
+            self.byte_index += self.char().len_utf8();
+            self.char_index += 1;
+
+            done = true;
+        }
+
+        if !done && self.char_index < self.source_len {
             self.byte_index += self.char().len_utf8();
             self.char_index += 1;
             self.column_index += 1;
+        }
+
+        while self.char_index < self.source_len && self.char() == '\n' {
+            self.column_index = 1;
+            self.line_index += 1;
+            self.byte_index += self.char().len_utf8();
+            self.char_index += 1;
         }
     }
 
@@ -161,15 +173,8 @@ impl<'src> Lexer<'src> {
         assert!(self.source_len == self.source_chars.len());
 
         while self.char_index < self.source_len {
-            if self.char().is_whitespace() {
-
-                if self.char() == '\n' {
-                    self.line_index += 1;
-                    self.column_index = 1;
-                }
-
+            while self.char().is_whitespace() {
                 self.inc_index();
-                continue;
             }
 
             let prev_index = self.char_index;
@@ -300,7 +305,7 @@ impl<'src> Lexer<'src> {
 
         let mut value: u128 = 0;
 
-        while self.char().is_numeric() || self.char() == '_' {
+        loop {
 
             if self.char() == '_' {
                 self.inc_index();
@@ -333,10 +338,24 @@ impl<'src> Lexer<'src> {
                 ));
             }
 
+            // We need to peek here to avoid adding a newline character to out number
+            let next = self.peek(1);
+
+            if let Some(next) = next {
+                if !(next.is_numeric() || next == '_') {
+                    break;
+                }
+            } else {
+                break;
+            }
+
             self.inc_index();
         }
 
-        let span = start_span.merge(self.span_excl());
+        let span = start_span.merge(self.span());
+
+        self.inc_index();
+
         Token::NumberLiteral(value, span)
     }
 
