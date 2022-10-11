@@ -251,7 +251,7 @@ impl ToString for ParsedOperator {
             BinaryMultiplication(_) => "*".into(),
             BinaryDivision(_) => "/".into(),
             BinaryModulo(_) => "%".into(),
-            UnaryLogicalNot(_) => "not ".into(),
+            UnaryLogicalNot(_) => "not".into(),
             BinaryLogicalAnd(_) => "and".into(),
             BinaryLogicalOr(_) => "or".into(),
             BinaryLogicalXor(_) => "xor".into(),
@@ -1688,7 +1688,10 @@ impl<'src> Parser<'src> {
             },
             // TODO: Precedence considering prefix and suffix operators
             _ if let Success(op) = self.parse_unary_prefix_operator() => {
-                match self.parse_expression_atom() {
+                let mut success = true;
+                let mut other_error = false;
+
+                let result = match self.parse_expression_atom() {
                     Success(t) => {
                         self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
                             op,
@@ -1699,6 +1702,9 @@ impl<'src> Parser<'src> {
                         Success(self.current_expr_atom())
                     },
                     WrongType => {
+                        success = false;
+                        other_error = false;
+
                         let junk = self.junk_atom(Some(op.span().after()));
                         self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
                             op,
@@ -1709,6 +1715,9 @@ impl<'src> Parser<'src> {
                         SyntaxError(Some(self.current_expr_atom()), op.span().after())
                     },
                     SyntaxError(Some(t), err_span) => {
+                        success = false;
+                        other_error = true;
+
                         self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
                             op,
                             t,
@@ -1718,6 +1727,9 @@ impl<'src> Parser<'src> {
                         SyntaxError(Some(self.current_expr_atom()), err_span)
                     },
                     SyntaxError(None, err_span) => {
+                        success = false;
+                        other_error = true;
+
                         let junk = self.junk_atom(Some(op.span().after()));
                         self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
                             op,
@@ -1728,6 +1740,9 @@ impl<'src> Parser<'src> {
                         SyntaxError(Some(self.current_expr_atom()), err_span)
                     },
                     EOF(Some(t), maybe_err_span) => {
+                        success = false;
+                        other_error = true;
+
                         self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
                             op,
                             t,
@@ -1737,6 +1752,9 @@ impl<'src> Parser<'src> {
                         EOF(Some(self.current_expr_atom()), maybe_err_span)
                     },
                     EOF(None, maybe_err_span) => {
+                        success = false;
+                        other_error = maybe_err_span.is_some();
+
                         let junk = self.junk_atom(Some(op.span().after()));
                         self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
                             op,
@@ -1746,7 +1764,19 @@ impl<'src> Parser<'src> {
 
                         EOF(Some(self.current_expr_atom()), maybe_err_span)
                     },
+                };
+
+                if !success && !other_error {
+                    let op_str = op.to_string();
+                    self.errors.push(Error::WithHint(
+                        "Prefix operator misses expression to act on".into(),
+                        op.span(),
+                        format!("Operator `{}` cannot stand alone; it needs to be in front of an expression atom `{} (expr)`", &op_str, &op_str),
+                        op.span().after(),
+                    ));
                 }
+
+                result
             },
             _ => WrongType,
         }
