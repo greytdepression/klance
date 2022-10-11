@@ -311,7 +311,7 @@ impl<'src> Lexer<'src> {
 
         let mut value: u128 = 0;
 
-        while self.char().is_numeric() || self.char() == '_' {
+        loop {
 
             if self.char() == '_' {
                 self.inc_index();
@@ -344,10 +344,24 @@ impl<'src> Lexer<'src> {
                 ));
             }
 
+            // We need to peek here to avoid adding a newline character to out number
+            let next = self.peek(1);
+
+            if let Some(next) = next {
+                if !(next.is_numeric() || next == '_') {
+                    break;
+                }
+            } else {
+                break;
+            }
+
             self.inc_index();
         }
 
-        let span = start_span.merge(self.span_excl());
+        let span = start_span.merge(self.span());
+
+        self.inc_index();
+
         Token::NumberLiteral(value, span)
     }
 
