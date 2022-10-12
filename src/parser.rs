@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 use std::fmt::Debug;
 
-use crate::{Span, Error};
+use crate::{Span, Error, index_struct};
 use crate::lexer::Token;
 use crate::datastructure::{BinaryTree, Side};
 
@@ -20,7 +20,7 @@ pub struct ParsedField<'src> {
     pub name_span: Span,
     pub type_name: &'src str,
     pub type_span: Span,
-    pub default_value: Option<ExpressionId>,
+    pub default_value: Option<ParsedExpressionId>,
     pub default_value_span: Option<Span>,
     pub visibility: Visibility,
     pub visibility_span: Span,
@@ -63,7 +63,7 @@ pub struct ParsedParameter<'src> {
     pub name_span: Span,
     pub type_name: &'src str,
     pub type_span: Span,
-    pub default_value: Option<ExpressionId>,
+    pub default_value: Option<ParsedExpressionId>,
     pub default_value_span: Option<Span>,
     pub anonymity: Anonymity,
     pub anonymity_span: Span,
@@ -100,7 +100,7 @@ impl<'src> ParsedCodeBlock<'src> {
 #[derive(Debug, Clone)]
 pub enum ParsedStatement<'src> {
     NoOp(Span),
-    Expression(ExpressionId, HasSemicolon),
+    Expression(ParsedExpressionId, HasSemicolon),
     VariableDeclaration(ParsedVariableDeclaration<'src>),
     ConstantDefinition(ParsedConstantDefinition<'src>),
     IfStatement(ParsedIfStatement<'src>),
@@ -115,7 +115,7 @@ pub enum HasSemicolon {
 
 #[derive(Debug, Clone)]
 pub struct ParsedIfStatement<'src> {
-    pub condition: ExpressionId,
+    pub condition: ParsedExpressionId,
     pub then_block: ParsedCodeBlock<'src>,
     pub else_statment: Option<ParsedElseStatement<'src>>,
     pub span: Span,
@@ -135,7 +135,7 @@ pub struct ParsedVariableDeclaration<'src> {
     pub type_span: Option<Span>,
     pub mutability: Mutability,
     pub mutability_span: Option<Span>,
-    pub initial_value: ExpressionId,
+    pub initial_value: ParsedExpressionId,
     pub span: Span,
 }
 
@@ -146,68 +146,51 @@ pub enum Mutability {
 }
 
 #[derive(Debug, Clone)]
-pub enum ParsedExpression {
+pub enum ParsedExpression<'src> {
     Junk(Span),
-    Atom(ExpressionAtomId, Span),
-    BinaryOperation(ExpressionId, ParsedOperator, ExpressionId, Span),
-}
 
-impl ParsedExpression {
+    // Recursive
+    EnclosedExpression(ParsedExpressionId, Span),
+    BinaryOperation(ParsedExpressionId, ParsedOperator, ParsedExpressionId, Span),
+
+    // Atoms
+    Unit(Span),
+    IntegerConstant(u128, Span),
+    BooleanConstant(bool, Span),
+    UnaryPrefixedExpression(ParsedOperator, ParsedExpressionId, Span),
+    Variable(&'src str, Span),
+    FunctionInvocation(&'src str, (), Span), //    pub TODO: add parameter type
+}
+index_struct!(ParsedExpressionId);
+
+impl<'src> ParsedExpression<'src> {
     pub fn span(&self) -> Span {
         use ParsedExpression::*;
         match self {
             Junk(span) |
-            Atom(_, span) |
-            BinaryOperation(_, _, _, span) => *span,
-        }
-    }
-
-    fn to_string<'a>(&self, parser: &Parser<'a>) -> String {
-        match self {
-            ParsedExpression::Junk(_) => "Junk".into(),
-            ParsedExpression::Atom(atom, _) => parser.get_atom(*atom).to_string(parser),
-            ParsedExpression::BinaryOperation(lhs, op, rhs, _)
-                => format!("({} {} {})", parser.get_expr(*lhs).to_string(parser), op.to_string(), parser.get_expr(*rhs).to_string(parser)),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum ParsedExpressionAtom<'src> {
-    Junk(Span),
-    Unit(Span),
-    IntegerConstant(u128, Span),
-    BooleanConstant(bool, Span),
-    EnclosedExpression(ExpressionId, Span),
-    UnaryPrefixedAtom(ParsedOperator, ExpressionAtomId, Span),
-    Variable(&'src str, Span),
-    FunctionInvocation(&'src str, (), Span), //    pub TODO: add parameter type
-}
-
-impl<'src> ParsedExpressionAtom<'src> {
-    pub fn span(&self) -> Span {
-        use ParsedExpressionAtom::*;
-        match self {
-            Junk(span) |
+            EnclosedExpression(_, span) |
+            BinaryOperation(_, _, _, span) |
             Unit(span) |
             IntegerConstant(_, span) |
             BooleanConstant(_, span) |
-            EnclosedExpression(_, span) |
-            UnaryPrefixedAtom(_, _, span) |
+            UnaryPrefixedExpression(_, _, span) |
             Variable(_, span) |
             FunctionInvocation(_, _, span) => *span,
         }
     }
 
     fn to_string<'a>(&self, parser: &Parser<'a>) -> String {
-        use ParsedExpressionAtom::*;
+        use ParsedExpression::*;
         match self {
-            Junk(_) => "🚮".into(),
             Unit(_) => "()".into(),
+            Junk(_) => "🚮".into(),
+            EnclosedExpression(inner, _) => parser.get_expr(*inner).to_string(parser),
+            BinaryOperation(lhs, op, rhs, _)
+                => format!("({} {} {})", parser.get_expr(*lhs).to_string(parser), op.to_string(), parser.get_expr(*rhs).to_string(parser)),
             IntegerConstant(val, _) => format!("{}", val),
             BooleanConstant(val, _) => format!("{}", val),
             EnclosedExpression(expr, _) => format!("({})", parser.get_expr(*expr).to_string(parser)),
-            UnaryPrefixedAtom(op, atom, _) => format!("({}{})", op.to_string(), parser.get_atom(*atom).to_string(parser)),
+            UnaryPrefixedExpression(op, inner, _) => format!("({}{})", op.to_string(), parser.get_expr(*inner).to_string(parser)),
             &Variable(identifier, _) => String::from(identifier),
             &FunctionInvocation(name, _, _) => format!("{}()", name),
         }
@@ -337,21 +320,18 @@ impl ParsedOperator {
 // Parser
 //--------------------------------------------------
 
+pub struct ParserData<'src> {
+    pub expressions: Vec<ParsedExpression<'src>>,
+}
+
 pub struct Parser<'src> {
     pub tokens: Vec<Token<'src>>,
     pub token_index: usize,
     pub errors: Vec<Error>,
 
     // data
-    pub expressions: Vec<ParsedExpression>,
-    pub expression_atoms: Vec<ParsedExpressionAtom<'src>>,
+    pub data: ParserData<'src>,
 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct ExpressionId(usize);
-
-#[derive(Debug, Clone, Copy)]
-pub struct ExpressionAtomId(usize);
 
 use ParsingResult::*;
 
@@ -361,8 +341,9 @@ impl<'src> Parser<'src> {
             tokens,
             token_index: 0,
             errors: vec![],
-            expressions: vec![],
-            expression_atoms: vec![],
+            data: ParserData {
+                expressions: vec![],
+            },
         }
     }
 
@@ -413,28 +394,16 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn current_expr(&self) -> ExpressionId {
-        ExpressionId(self.expressions.len() - 1)
+    fn current_expr(&self) -> ParsedExpressionId {
+        ParsedExpressionId(self.data.expressions.len() - 1)
     }
 
-    fn current_expr_atom(&self) -> ExpressionAtomId {
-        ExpressionAtomId(self.expression_atoms.len() - 1)
+    fn get_expr(&self, id: ParsedExpressionId) -> &ParsedExpression {
+        &self.data.expressions[id.0]
     }
 
-    fn get_expr(&self, id: ExpressionId) -> &ParsedExpression {
-        &self.expressions[id.0]
-    }
-
-    fn get_atom(&self, id: ExpressionAtomId) -> &ParsedExpressionAtom {
-        &self.expression_atoms[id.0]
-    }
-
-    fn expr_span(&self, id: ExpressionId) -> Span {
+    fn expr_span(&self, id: ParsedExpressionId) -> Span {
         self.get_expr(id).span()
-    }
-
-    fn atom_span(&self, id: ExpressionAtomId) -> Span {
-        self.get_atom(id).span()
     }
 
     fn stmt_span(&self, stmt: &ParsedStatement) -> Span {
@@ -449,28 +418,24 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn junk_expr(&mut self, maybe_span: Option<Span>) -> ExpressionId {
+    fn junk_expr(&mut self, maybe_span: Option<Span>) -> ParsedExpressionId {
         let span = if let Some(span) = maybe_span {
             span
         } else {
             self.span()
         };
 
-        self.expressions.push(ParsedExpression::Junk(span));
+        self.data.expressions.push(ParsedExpression::Junk(span));
 
         self.current_expr()
     }
 
-    fn junk_atom(&mut self, maybe_span: Option<Span>) -> ExpressionAtomId {
-        let span = if let Some(span) = maybe_span {
-            span
-        } else {
-            self.span()
-        };
+    fn push_expr(&mut self, expr: ParsedExpression<'src>) {
+        self.data.expressions.push(expr)
+    }
 
-        self.expression_atoms.push(ParsedExpressionAtom::Junk(span));
-
-        self.current_expr_atom()
+    fn num_expressions(&self) -> usize {
+        self.data.expressions.len()
     }
 
     // We are always going to make the parse function return options, but the
@@ -1344,14 +1309,14 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_expression(&mut self) -> ParsingResult<ExpressionId> {
+    fn parse_expression(&mut self) -> ParsingResult<ParsedExpressionId> {
         let mut span = self.span();
 
         if !self.has_token() {
             return EOF(None, None);
         }
 
-        let len_atoms_initial = self.expression_atoms.len();
+        let len_exprs_initial = self.num_expressions();
 
         let mut success = true;
 
@@ -1368,17 +1333,13 @@ impl<'src> Parser<'src> {
             SyntaxError(None, span) => {
                 success = false;
 
-                self.junk_atom(Some(span))
+                self.junk_expr(Some(span))
             }
-            EOF(Some(t), maybe_err_span) => {
-                self.expressions.push(ParsedExpression::Atom(t, span));
-
-                return EOF(Some(self.current_expr()), maybe_err_span);
-            },
+            EOF(Some(t), maybe_err_span) => return EOF(Some(self.current_expr()), maybe_err_span),
             EOF(None, maybe_err_span) => return EOF(Some(self.junk_expr(maybe_err_span)), maybe_err_span),
         };
 
-        span = span.merge(self.atom_span(lhs_atom));
+        span = span.merge(self.expr_span(lhs_atom));
 
         // Only create tree once we know we have at least one expression atom
         let mut tree: BinaryTree<ExpressionTreeData, _> = BinaryTree::new(|lhs, rhs| {
@@ -1412,18 +1373,9 @@ impl<'src> Parser<'src> {
                     ParsedOperator::Junk(err_span)
                 },
                 EOF(Some(t), maybe_err_span) => {
-                    // Insert junk rhs
-                    // Add tree data
-                    let op_data = ExpressionTreeData::BinOp(t);
-                    let rhs_atom_data = ExpressionTreeData::Atom(self.junk_atom(Some(span.after())));
+                    success = maybe_err_span.is_none();
 
-                    _ = tree.insert_root(
-                        op_data,
-                        Side::Left,
-                        Some(rhs_atom_data)
-                    );
-
-                    break;
+                    t
                 },
             };
 
@@ -1442,9 +1394,9 @@ impl<'src> Parser<'src> {
 
                     success = false;
 
-                    self.junk_atom(Some(span.after()))
+                    self.junk_expr(Some(span.after()))
                 },
-                SyntaxError(Some(t), _) | EOF(Some(t), _) => {
+                SyntaxError(Some(t), _) => {
                     success = false;
 
                     t
@@ -1452,12 +1404,17 @@ impl<'src> Parser<'src> {
                 SyntaxError(None, err_span) => {
                     success = false;
 
-                    self.junk_atom(Some(err_span))
+                    self.junk_expr(Some(err_span))
+                },
+                EOF(Some(t), maybe_err_span) => {
+                    success = maybe_err_span.is_none();
+
+                    t
                 },
                 EOF(None, maybe_err_span) => {
                     success = false;
 
-                    self.junk_atom(None)
+                    self.junk_expr(None)
                 },
             };
 
@@ -1484,7 +1441,7 @@ impl<'src> Parser<'src> {
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                let atom = parser.get_atom(id).clone();
+                let atom = parser.get_expr(id).clone();
 
                 return atom.to_string(parser);
             }
@@ -1510,18 +1467,14 @@ impl<'src> Parser<'src> {
             parser: &mut Parser<'a>,
             tree: &BinaryTree<ExpressionTreeData, F>,
             start_index: usize
-        ) -> ExpressionId
+        ) -> ParsedExpressionId
             where F: Fn(ExpressionTreeData, ExpressionTreeData) -> Ordering
         {
             use ExpressionTreeData::*;
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                let span = parser.get_atom(id).span();
-
-                parser.expressions.push(ParsedExpression::Atom(id, span));
-
-                return parser.current_expr();
+                return id;
             }
 
             assert!(matches!(node.data(), &BinOp(_)));
@@ -1543,7 +1496,7 @@ impl<'src> Parser<'src> {
 
             let span = lhs_span.merge(rhs_span);
 
-            parser.expressions.push(ParsedExpression::BinaryOperation(
+            parser.push_expr(ParsedExpression::BinaryOperation(
                 lhs,
                 op,
                 rhs,
@@ -1558,28 +1511,28 @@ impl<'src> Parser<'src> {
 
 
 
-    fn parse_expression_atom(&mut self) -> ParsingResult<ExpressionAtomId> {
+    fn parse_expression_atom(&mut self) -> ParsingResult<ParsedExpressionId> {
         if !self.has_token() {
             return EOF(None, None);
         }
 
         use Token::*;
-        use ParsedExpressionAtom::*;
+        use ParsedExpression::*;
         let tk = *self.token().unwrap();
         match tk {
             NumberLiteral(value, span) => {
                 self.inc();
 
-                self.expression_atoms.push(IntegerConstant(value, span));
+                self.push_expr(IntegerConstant(value, span));
 
-                Success(self.current_expr_atom())
+                Success(self.current_expr())
             },
             BooleanLiteral(value, span) => {
                 self.inc();
 
-                self.expression_atoms.push(BooleanConstant(value, span));
+                self.push_expr(BooleanConstant(value, span));
 
-                Success(self.current_expr_atom())
+                Success(self.current_expr())
             },
             Identifier(name, span) => {
 
@@ -1594,9 +1547,9 @@ impl<'src> Parser<'src> {
                 self.inc();
 
                 // If it's not a function, it's a variable
-                self.expression_atoms.push(Variable(name, span));
+                self.push_expr(Variable(name, span));
 
-                Success(self.current_expr_atom())
+                Success(self.current_expr())
             },
             LParen(mut span) => {
                 if !self.inc() {
@@ -1607,9 +1560,9 @@ impl<'src> Parser<'src> {
                         span,
                     ));
 
-                    self.expression_atoms.push(ParsedExpressionAtom::Unit(span));
+                    self.push_expr(Unit(span));
 
-                    return EOF(Some(self.current_expr_atom()), Some(span));
+                    return EOF(Some(self.current_expr()), Some(span));
                 }
 
                 let lparen_span = span;
@@ -1635,13 +1588,13 @@ impl<'src> Parser<'src> {
                     ));
 
                     let atom = match expr.to_opt() {
-                        Some(t) => ParsedExpressionAtom::EnclosedExpression(t, span),
-                        None => ParsedExpressionAtom::Junk(span),
+                        Some(t) => EnclosedExpression(t, span),
+                        None => Junk(span),
                     };
 
-                    self.expression_atoms.push(atom);
+                    self.push_expr(atom);
 
-                    let atom = self.current_expr_atom();
+                    let atom = self.current_expr();
 
                     return match expr {
                         EOF(_, _) => EOF(Some(atom), Some(span)),
@@ -1655,34 +1608,34 @@ impl<'src> Parser<'src> {
 
                 match expr {
                     Success(t) => {
-                        self.expression_atoms.push(EnclosedExpression(t, span));
+                        self.push_expr(EnclosedExpression(t, span));
 
-                        Success(self.current_expr_atom())
+                        Success(self.current_expr())
                     },
                     WrongType => {
-                        self.expression_atoms.push(Unit(span));
+                        self.push_expr(Unit(span));
 
-                        Success(self.current_expr_atom())
+                        Success(self.current_expr())
                     },
                     SyntaxError(Some(t), err_span) => {
-                        self.expression_atoms.push(EnclosedExpression(t, span));
+                        self.push_expr(EnclosedExpression(t, span));
 
-                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                        SyntaxError(Some(self.current_expr()), err_span)
                     },
                     SyntaxError(None, err_span) => {
-                        self.expression_atoms.push(Unit(span));
+                        self.push_expr(Unit(span));
 
-                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                        SyntaxError(Some(self.current_expr()), err_span)
                     },
                     EOF(Some(t), maybe_err_span) => {
-                        self.expression_atoms.push(EnclosedExpression(t, span));
+                        self.push_expr(EnclosedExpression(t, span));
 
-                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                        EOF(Some(self.current_expr()), maybe_err_span)
                     },
                     EOF(None, maybe_err_span) => {
-                        self.expression_atoms.push(Unit(span));
+                        self.push_expr(Unit(span));
 
-                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                        EOF(Some(self.current_expr()), maybe_err_span)
                     },
                 }
             },
@@ -1693,76 +1646,76 @@ impl<'src> Parser<'src> {
 
                 let result = match self.parse_expression_atom() {
                     Success(t) => {
-                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                        self.push_expr(UnaryPrefixedExpression(
                             op,
                             t,
-                            op.span().merge(self.atom_span(t))
+                            op.span().merge(self.expr_span(t))
                         ));
 
-                        Success(self.current_expr_atom())
+                        Success(self.current_expr())
                     },
                     WrongType => {
                         success = false;
                         other_error = false;
 
-                        let junk = self.junk_atom(Some(op.span().after()));
-                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                        let junk = self.junk_expr(Some(op.span().after()));
+                        self.push_expr(UnaryPrefixedExpression(
                             op,
                             junk,
                             op.span()
                         ));
 
-                        SyntaxError(Some(self.current_expr_atom()), op.span().after())
+                        SyntaxError(Some(self.current_expr()), op.span().after())
                     },
                     SyntaxError(Some(t), err_span) => {
                         success = false;
                         other_error = true;
 
-                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                        self.push_expr(UnaryPrefixedExpression(
                             op,
                             t,
-                            op.span().merge(self.atom_span(t))
+                            op.span().merge(self.expr_span(t))
                         ));
 
-                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                        SyntaxError(Some(self.current_expr()), err_span)
                     },
                     SyntaxError(None, err_span) => {
                         success = false;
                         other_error = true;
 
-                        let junk = self.junk_atom(Some(op.span().after()));
-                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                        let junk = self.junk_expr(Some(op.span().after()));
+                        self.push_expr(UnaryPrefixedExpression(
                             op,
                             junk,
                             op.span()
                         ));
 
-                        SyntaxError(Some(self.current_expr_atom()), err_span)
+                        SyntaxError(Some(self.current_expr()), err_span)
                     },
                     EOF(Some(t), maybe_err_span) => {
                         success = false;
                         other_error = true;
 
-                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                        self.push_expr(UnaryPrefixedExpression(
                             op,
                             t,
-                            op.span().merge(self.atom_span(t))
+                            op.span().merge(self.expr_span(t))
                         ));
 
-                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                        EOF(Some(self.current_expr()), maybe_err_span)
                     },
                     EOF(None, maybe_err_span) => {
                         success = false;
                         other_error = maybe_err_span.is_some();
 
-                        let junk = self.junk_atom(Some(op.span().after()));
-                        self.expression_atoms.push(ParsedExpressionAtom::UnaryPrefixedAtom(
+                        let junk = self.junk_expr(Some(op.span().after()));
+                        self.push_expr(UnaryPrefixedExpression(
                             op,
                             junk,
                             op.span()
                         ));
 
-                        EOF(Some(self.current_expr_atom()), maybe_err_span)
+                        EOF(Some(self.current_expr()), maybe_err_span)
                     },
                 };
 
@@ -1782,7 +1735,7 @@ impl<'src> Parser<'src> {
         }
     }
 
-    fn parse_function_invocation(&mut self) -> ParsingResult<ExpressionAtomId> {
+    fn parse_function_invocation(&mut self) -> ParsingResult<ParsedExpressionId> {
         if !self.has_token() {
             return EOF(None, None);
         }
@@ -1838,16 +1791,16 @@ impl<'src> Parser<'src> {
             self.inc();
         }
 
-        self.expression_atoms.push(ParsedExpressionAtom::FunctionInvocation(
+        self.push_expr(ParsedExpression::FunctionInvocation(
             name,
             (),
             name_span.merge(span),
         ));
 
         if success {
-            Success(self.current_expr_atom())
+            Success(self.current_expr())
         } else {
-            SyntaxError(Some(self.current_expr_atom()), error_span)
+            SyntaxError(Some(self.current_expr()), error_span)
         }
     }
 
@@ -1909,7 +1862,7 @@ impl<'src> Parser<'src> {
 
 #[derive(Debug, Clone, Copy)]
 enum ExpressionTreeData {
-    Atom(ExpressionAtomId),
+    Atom(ParsedExpressionId),
     BinOp(ParsedOperator),
 }
 
