@@ -1,9 +1,11 @@
 #![feature(if_let_guard)]
+#[macro_use]
 
 mod lexer;
 mod parser;
 mod util;
 mod datastructure;
+mod macros;
 
 use lexer::Lexer;
 use parser::Parser;
