@@ -753,7 +753,7 @@ impl<'src> Parser<'src> {
                 maybe_span = Some(self.token().unwrap().span());
                 maybe_stmt = Some(ParsedStatement::NoOp(self.token().unwrap().span()));
 
-                // FIXME: Emit warning about this semicolon
+                // TODO: Emit warning about this semicolon
 
                 self.inc();
 
@@ -831,6 +831,8 @@ impl<'src> Parser<'src> {
                     maybe_span = Some(err_span);
                     maybe_err_span = Some(err_span);
 
+                    needs_semicolon = false;
+
                     success = false;
                     break;
                 },
@@ -839,6 +841,8 @@ impl<'src> Parser<'src> {
                     maybe_stmt = Some(ParsedStatement::IfStatement(t));
                     maybe_err_span = Some(err_span);
 
+                    needs_semicolon = false;
+
                     success = false;
                     break;
                 },
@@ -846,6 +850,8 @@ impl<'src> Parser<'src> {
                     maybe_span = Some(t.span);
                     maybe_stmt = Some(ParsedStatement::IfStatement(t));
                     maybe_err_span = eof_maybe_span;
+
+                    needs_semicolon = false;
 
                     success = false;
                     break;
@@ -869,6 +875,8 @@ impl<'src> Parser<'src> {
                     maybe_span = Some(err_span);
                     maybe_err_span = Some(err_span);
 
+                    needs_semicolon = false;
+
                     success = false;
                     break;
                 },
@@ -877,6 +885,8 @@ impl<'src> Parser<'src> {
                     maybe_stmt = Some(ParsedStatement::Block(t));
                     maybe_err_span = Some(err_span);
 
+                    needs_semicolon = false;
+
                     success = false;
                     break;
                 },
@@ -884,6 +894,8 @@ impl<'src> Parser<'src> {
                     maybe_span = Some(t.span);
                     maybe_stmt = Some(ParsedStatement::Block(t));
                     maybe_err_span = efo_maybe_span;
+
+                    needs_semicolon = false;
 
                     success = false;
                     break;
@@ -920,7 +932,7 @@ impl<'src> Parser<'src> {
         if needs_semicolon {
             if !matches!(self.token(), Some(Semicolon(_))) {
                 self.errors.push(Error::WithHint(
-                    "Statement misses semicolon".into(),
+                    "Statement misses semicolon.".into(),
                     maybe_span.unwrap(),
                     "Add a semicolon at the end of the statement.".into(),
                     maybe_span.unwrap().after(),
@@ -1239,8 +1251,12 @@ impl<'src> Parser<'src> {
 
                 t
             },
-            EOF(Some(t), _) => {
-                success = false;
+            EOF(Some(t), eof_maybe_err_span) => {
+                success = eof_maybe_err_span.is_some();
+
+                if eof_maybe_err_span.is_some() {
+                    maybe_err_span = eof_maybe_err_span;
+                }
 
                 t
             },
@@ -1286,9 +1302,9 @@ impl<'src> Parser<'src> {
         } else {
 
             // See if we can create a dummy ParsedVariableDeclaration
-            let dummy_value = if var_name.is_some() {
+            let dummy_value = if let Some(var_name) = var_name {
                 Some(ParsedVariableDeclaration {
-                    name: var_name.unwrap(),
+                    name: var_name,
                     name_span: var_name_span.unwrap_or(total_span),
                     type_name: None,
                     type_span: None,
@@ -1309,6 +1325,10 @@ impl<'src> Parser<'src> {
         }
     }
 
+    fn reset_expressions(&mut self, index: usize) {
+        self.data.expressions.truncate(index);
+    }
+
     fn parse_expression(&mut self) -> ParsingResult<ParsedExpressionId> {
         let mut span = self.span();
 
@@ -1320,18 +1340,33 @@ impl<'src> Parser<'src> {
 
         let mut success = true;
 
+        let mut has_lhs = true;
+
+        let mut maybe_error_span: Option<Span> = None;
+
 
         // First expression atom
         let lhs_atom = match self.parse_expression_atom() {
             Success(t) => t,
-            WrongType => return WrongType,
+            WrongType => {
+                success = false;
+                has_lhs = false;
+
+                maybe_error_span = Some(self.span());
+
+                self.junk_expr(None)
+            },
             SyntaxError(Some(t), span) => {
                 success = false;
+
+                maybe_error_span = Some(span);
 
                 t
             },
             SyntaxError(None, span) => {
                 success = false;
+
+                maybe_error_span = Some(span);
 
                 self.junk_expr(Some(span))
             }
@@ -1353,27 +1388,45 @@ impl<'src> Parser<'src> {
         let lhs_data = ExpressionTreeData::Atom(lhs_atom);
         _ = tree.insert_root(lhs_data, Side::Left, None);
 
+        let mut current_lhs_span: Span = self.expr_span(lhs_atom);
+
+        let mut first = true;
         loop {
             // Binary operator
+
+            let mut has_operator = true;
 
             let op = match self.parse_binary_operator() {
                 // Successful cases
                 Success(t) => t,
-                WrongType | EOF(None, _) => break,
-
+                WrongType | EOF(None, _) if !has_lhs && first => {
+                    success = false;
+                    self.reset_expressions(len_exprs_initial);
+                    return WrongType;
+                },
+                WrongType | EOF(None, _) => {
+                    has_operator = false;
+                    ParsedOperator::Junk(self.span())
+                },
                 // Unsuccessful cases
                 SyntaxError(Some(t), err_span) => {
                     success = false;
+
+                    maybe_error_span = Some(err_span);
 
                     t
                 },
                 SyntaxError(None, err_span) => {
                     success = false;
 
+                    maybe_error_span = Some(err_span);
+
                     ParsedOperator::Junk(err_span)
                 },
                 EOF(Some(t), maybe_err_span) => {
                     success = maybe_err_span.is_none();
+
+                    maybe_error_span = maybe_err_span;
 
                     t
                 },
@@ -1382,41 +1435,125 @@ impl<'src> Parser<'src> {
             span.merge_into(op.span());
 
             // RHS atom
+            let mut has_rhs = true;
+
             let rhs_atom = match self.parse_expression_atom() {
                 Success(t) => t,
                 WrongType => {
-                    self.errors.push(Error::WithHint(
-                        "Incomplete expression.".into(),
-                        span,
-                        "Binary operator misses expression to act upon.".into(),
-                        op.span(),
-                    ));
-
+                    has_rhs = false;
                     success = false;
+
+                    if has_operator {
+                        maybe_error_span = Some(self.span());
+                    }
 
                     self.junk_expr(Some(span.after()))
                 },
-                SyntaxError(Some(t), _) => {
+                SyntaxError(Some(t), err_span) => {
                     success = false;
+
+                    maybe_error_span = Some(err_span);
 
                     t
                 },
                 SyntaxError(None, err_span) => {
                     success = false;
 
+                    maybe_error_span = Some(err_span);
+
                     self.junk_expr(Some(err_span))
                 },
                 EOF(Some(t), maybe_err_span) => {
                     success = maybe_err_span.is_none();
 
+                    maybe_error_span = maybe_err_span;
+
                     t
                 },
-                EOF(None, maybe_err_span) => {
+                EOF(None, _) => {
                     success = false;
+                    has_rhs = false;
+
+                    if has_operator {
+                        maybe_error_span = Some(self.span());
+                    }
 
                     self.junk_expr(None)
                 },
             };
+
+            // Error handling
+            if first {
+                match (has_lhs, has_operator, has_rhs) {
+                    (true, true, true) => {},       // Everything went well
+                    (true, true, false) => {        // We're missing the rhs
+                        self.errors.push(Error::WithHint(
+                            "Incomplete expression.".into(),
+                            span,
+                            "Binary operator misses right-hand side expression to act upon.".into(),
+                            op.span(),
+                        ));
+                    },
+                    (true, false, true) => {        // We're missing a binary operator
+                        self.errors.push(Error::WithHint(
+                            "Incomplete expression.".into(),
+                            span,
+                            "Expression atoms miss binary operator to link them together.".into(),
+                            current_lhs_span.merge(self.expr_span(rhs_atom)),
+                        ));
+                    },
+                    (true, false, false) => {       // Everything went well. Expression is just a single expression atom.
+
+                        break;
+                        // match (success, self.eof()) {
+                        //     (true, _) => return Success(lhs_atom),
+                        //     (false, true) => return EOF(Some(lhs_atom), Some(self.expr_span(lhs_atom))),
+                        //     (false, false) => return SyntaxError(Some(lhs_atom), self.expr_span(lhs_atom)),
+                        // }
+                    },
+                    (false, true, true) => {        // We're missing the lhs
+                        self.errors.push(Error::WithHint(
+                            "Incomplete expression.".into(),
+                            span,
+                            "Binary operator misses left-hand side expression to act upon.".into(),
+                            op.span(),
+                        ));
+                    },
+                    (false, true, false) => {       // Singleton binary operator
+                        self.errors.push(Error::WithHint(
+                            "Incomplete expression.".into(),
+                            span,
+                            "Binary operator misses left and right-hand sides to act upon.".into(),
+                            op.span(),
+                        ));
+                    },
+                    (false, false, _) => panic!("Expression (!lhs, !op, _): We should have already returned."),
+                }
+            } else {
+                match (has_operator, has_rhs) {
+                    (true, true) => {},         // Everything went well uwu
+                    (true, false) => {          // Missing rhs
+                        self.errors.push(Error::WithHint(
+                            "Incomplete expression.".into(),
+                            span,
+                            "Binary operator misses right-hand side expression to act upon.".into(),
+                            op.span(),
+                        ));
+                    },
+                    (false, true) => {          // Missing operator
+                        self.errors.push(Error::WithHint(
+                            "Incomplete expression.".into(),
+                            span,
+                            "Expression atoms miss binary operator to link them together.".into(),
+                            current_lhs_span.merge(self.expr_span(rhs_atom)),
+                        ));
+                    },
+                    (false, false) => break,    // Everything went well. Expression is just a single expression atom.
+                                                // At this point we can safely return, as the next tokens cannot be part of the expression.
+                }
+            }
+
+            current_lhs_span = self.expr_span(rhs_atom);
 
             // Add data to tree
 
@@ -1428,6 +1565,9 @@ impl<'src> Parser<'src> {
                 Side::Left,
                 Some(rhs_atom_data)
             );
+
+            first = false;
+            has_lhs = true;
         }
 
         fn print_tree<'a, F>(
@@ -1467,14 +1607,14 @@ impl<'src> Parser<'src> {
             parser: &mut Parser<'a>,
             tree: &BinaryTree<ExpressionTreeData, F>,
             start_index: usize
-        ) -> ParsedExpressionId
+        ) -> (ParsedExpressionId, Span)
             where F: Fn(ExpressionTreeData, ExpressionTreeData) -> Ordering
         {
             use ExpressionTreeData::*;
             let node = tree.get_node(start_index);
 
             if let &Atom(id) = node.data() {
-                return id;
+                return (id, parser.expr_span(id));
             }
 
             assert!(matches!(node.data(), &BinOp(_)));
@@ -1488,13 +1628,10 @@ impl<'src> Parser<'src> {
             let lhs = tree.get_node(start_index).lhs().expect("Binary operator node does not have an lhs!");
             let rhs = tree.get_node(start_index).rhs().expect("Binary operator node does not have an rhs!");
 
-            let lhs = build_expression_tree(parser, tree, lhs);
-            let rhs = build_expression_tree(parser, tree, rhs);
+            let (lhs, lhs_span) = build_expression_tree(parser, tree, lhs);
+            let (rhs, rhs_span) = build_expression_tree(parser, tree, rhs);
 
-            let lhs_span = parser.expr_span(lhs);
-            let rhs_span = parser.expr_span(rhs);
-
-            let span = lhs_span.merge(rhs_span);
+            let span = lhs_span.merge(op.span()).merge(rhs_span);
 
             parser.push_expr(ParsedExpression::BinaryOperation(
                 lhs,
@@ -1503,10 +1640,16 @@ impl<'src> Parser<'src> {
                 span,
             ));
 
-            parser.current_expr()
+            (parser.current_expr(), span)
         }
 
-        Success(build_expression_tree(self, &tree, tree.root()))
+        let (top_expr, _) = build_expression_tree(self, &tree, tree.root());
+
+        match (success, self.eof()) {
+            (true, _) => Success(top_expr),
+            (false, false) => SyntaxError(Some(top_expr), maybe_error_span.unwrap_or(span)),
+            (false, true) => EOF(Some(top_expr), maybe_error_span),
+        }
     }
 
 

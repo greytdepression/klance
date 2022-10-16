@@ -122,6 +122,10 @@ fn print_line(source: &str, lines: &Vec<usize>, span: Span, max_line_number: usi
 
     let (line, column) = pos(span);
 
+    let (end_line, end_column) = pos(span.end());
+
+    let multi_line = end_line != line;
+
     let line_number_str = line.to_string();
     let prefix_len = 1 + buffer - line_number_str.len();
 
@@ -132,23 +136,68 @@ fn print_line(source: &str, lines: &Vec<usize>, span: Span, max_line_number: usi
     println!("{}|", &empty_line_number);
     println!("{}{} | {}", prefix, line_number_str, &source[lines[line - 1]..lines[line]-1]);
 
-    let prefix_columns = " ".repeat(column - 1);
+    if !multi_line {
+        let prefix_columns = " ".repeat(column - 1);
 
-    let mut span_len = span.end - span.start;
+        let mut span_len = span.end - span.start;
 
-    if span_len == 0 {
-        span_len = 1;
-    }
+        if span_len == 0 {
+            span_len = 1;
+        }
 
-    let underline = "^".repeat(span_len);
-    if line + 1 < lines.len() {
-        let underline = if matches!(color, Color::Red) {
-            underline.red()
-        } else {
-            underline.yellow()
-        };
+        let underline = "^".repeat(span_len);
+        if line + 1 < lines.len() {
+            let underline = if matches!(color, Color::Red) {
+                underline.red()
+            } else {
+                underline.yellow()
+            };
 
-        println!("{}| {}{}", &empty_line_number, prefix_columns, underline);
+            println!("{}| {}{}", &empty_line_number, prefix_columns, underline);
+        }
+    } else {
+        let prefix_columns = " ".repeat(column - 1);
+
+        let mut span_len_start = lines[line] - span.start;
+
+        if span_len_start == 0 {
+            span_len_start = 1;
+        }
+
+        let underline = format!("{} ^ ^", "^".repeat(span_len_start));
+        if line + 1 < lines.len() {
+            let underline = if matches!(color, Color::Red) {
+                underline.red()
+            } else {
+                underline.yellow()
+            };
+
+            println!("{}| {}{}", &empty_line_number, prefix_columns, underline);
+        }
+
+        // if the final line is not the next one, add some additional spacing
+        if end_line > line + 1 {
+            println!("");
+        }
+
+        // print the end line
+        let line_number_str = end_line.to_string();
+        let prefix_len = 1 + buffer - line_number_str.len();
+
+        let prefix = " ".repeat(prefix_len);
+        println!("{}{} | {}", prefix, line_number_str, &source[lines[end_line - 1]..lines[end_line]-1]);
+
+        // print end line squigglies
+        let underline = "^".repeat(end_column);
+        if end_line + 1 < lines.len() {
+            let underline = if matches!(color, Color::Red) {
+                underline.red()
+            } else {
+                underline.yellow()
+            };
+
+            println!("{}| {}", &empty_line_number, underline);
+        }
     }
 }
 
@@ -189,6 +238,15 @@ impl Span {
             start,
             end: start + 1,
             after: true,
+        }
+    }
+
+    pub fn end(&self) -> Span {
+        let start = if self.end > self.start { self.end - 1 } else { self.start };
+        Span {
+            start,
+            end: start + 1,
+            after: false,
         }
     }
 }
