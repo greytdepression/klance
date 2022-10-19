@@ -1,5 +1,6 @@
 use std::cmp::{Ordering, min, max};
 use std::fmt::Debug;
+use std::num;
 
 /// Insert only binary tree that uses a comparator function to ensure the root is always a
 /// maximal element. Assumes total ordering.
@@ -249,31 +250,34 @@ pub struct StaticSparseDigraph<N>
     where N: Clone + Debug
 {
     node_data: Vec<N>,
-    graph_data: Option<TightlyPackedDatalessSparseDigraph>,
+    graph_data: TightlyPackedDatalessSparseDigraph,
 }
 
 impl<N: Clone + Debug> StaticSparseDigraph<N> {
-    pub fn new(node_data: Vec<N>) -> Self {
+    // pub fn new(node_data: Vec<N>) -> Self {
+    //     Self {
+    //         node_data,
+    //         graph_data: None,
+    //     }
+    // }
+
+    pub fn builder(num_nodes: usize) -> DigraphBuilder {
+        DigraphBuilder::new(num_nodes)
+    }
+
+    pub fn construct(builder: DigraphBuilder, data: Vec<N>) -> Self {
+        assert!(data.len() == builder.n);
+
         Self {
-            node_data,
-            graph_data: None,
+            node_data: data,
+            graph_data: builder.into(),
         }
     }
 
-    pub fn builder(&self) -> DigraphBuilder {
-        DigraphBuilder::new(self.node_data.len())
-    }
+    pub fn construct_acyclic(builder: DigraphBuilder, data: Vec<N>) -> (Self, Vec<Cycle>) {
+        let output = Self::construct(builder, data);
 
-    pub fn construct(&mut self, builder: DigraphBuilder) {
-        assert!(self.node_data.len() == builder.n);
-
-        self.graph_data = Some(builder.into());
-    }
-
-    pub fn construct_acyclic(&mut self, builder: DigraphBuilder) -> Vec<Cycle> {
-        self.construct(builder);
-
-        let graph = self.graph_data.as_mut().unwrap();
+        let graph = &output.graph_data;
 
         graph.calculate_distances();
 
@@ -291,7 +295,7 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
             }
         }
 
-        cycles
+        (output, cycles)
     }
 
     /// If `j` is reachable from `i` it returns `Some(dist(i, j))`, if not `None`.
@@ -299,9 +303,7 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
     /// If the distance matrix has not been calculated yet, this call will take
     /// O(n^3) time on first execution. Subsequent calls take O(1) time.
     pub fn distance(&mut self, i: usize, j: usize) -> Option<u32> {
-        assert!(self.graph_data.is_some());
-
-        let graph = self.graph_data.as_mut().unwrap();
+        let graph = &self.graph_data;
 
         if graph.distance_matrix.is_none() {
             graph.calculate_distances();
@@ -311,9 +313,7 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
     }
 
     pub fn neighbours(&self, i: usize) -> NeighbourhoodIterator {
-        assert!(self.graph_data.is_some());
-
-        let graph = self.graph_data.as_ref().unwrap();
+        let graph = &self.graph_data;
 
         assert!(graph.distance_matrix.is_some());
 
@@ -321,9 +321,7 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
     }
 
     pub fn in_neighbours(&self, i: usize) -> NeighbourhoodIterator {
-        assert!(self.graph_data.is_some());
-
-        let graph = self.graph_data.as_ref().unwrap();
+        let graph = &self.graph_data;
 
         assert!(graph.distance_matrix.is_some());
 
@@ -331,9 +329,7 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
     }
 
     pub fn out_neighbours(&self, i: usize) -> NeighbourhoodIterator {
-        assert!(self.graph_data.is_some());
-
-        let graph = self.graph_data.as_ref().unwrap();
+        let graph = &self.graph_data;
 
         assert!(graph.distance_matrix.is_some());
 
@@ -341,9 +337,7 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
     }
 
     pub fn degree(&self, i: usize) -> Degree {
-        assert!(self.graph_data.is_some());
-
-        let graph = self.graph_data.as_ref().unwrap();
+        let graph = &self.graph_data;
 
         assert!(graph.distance_matrix.is_some());
 
@@ -355,8 +349,8 @@ impl<N: Clone + Debug> StaticSparseDigraph<N> {
 pub struct Cycle(usize, usize);
 
 #[derive(Clone, Debug)]
-struct DigraphBuilder {
-    pub n: usize,
+pub struct DigraphBuilder {
+    n: usize,
     edges: Vec<Vec<Edge>>,
 }
 

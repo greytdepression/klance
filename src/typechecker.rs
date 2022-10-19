@@ -1,6 +1,6 @@
 use std::cmp::max;
 
-use crate::datastructure::StaticSparseDigraph;
+use crate::datastructure::{StaticSparseDigraph, DigraphBuilder};
 use crate::{Span, Error};
 use crate::parser::*;
 use crate::index_struct;
@@ -240,17 +240,45 @@ pub struct CheckedField<'src> {
 //--------------------------------------------------
 
 pub struct Typechecker<'src> {
-    expression_data: StaticSparseDigraph<ParsedExpression>,
+    expression_graph: StaticSparseDigraph<ParsedExpression<'src>>,
 }
 
-impl Typechecker {
-    pub fn typecheck(&mut self) {
+impl<'src> Typechecker<'src> {
+    pub fn typecheck(parser_data: ParserData<'src>) -> Self {
+        let mut builder = StaticSparseDigraph::<ParsedExpression<'src>>::builder(parser_data.expressions.len());
 
+        Typechecker::typecheck_expression_atoms(&parser_data.expressions, &mut builder);
+
+        let (expression_graph, cycles) = StaticSparseDigraph::construct_acyclic(builder, parser_data.expressions);
+
+        if !cycles.is_empty() {
+            panic!("Cyclic dependencies");
+        }
+
+        Self {
+            expression_graph,
+        }
     }
 
-    fn typecheck_expressions(&mut self) {
-        for atom in self.parser_data.expression_atoms.iter() {
+    fn typecheck_expression_atoms(exprs: &Vec<ParsedExpression<'src>>, builder: &mut DigraphBuilder) {
 
+        // Hint: The dependency graph is such that an expression points to the expressions it depends on
+        for (i, expr) in exprs.iter().enumerate() {
+            use ParsedExpression::*;
+            match expr {
+                &Junk(_) => {},
+                &EnclosedExpression(other_id, _) => builder.insert_arc(i, other_id.value()),
+                &BinaryOperation(lhs, _, rhs, _) => {
+                    builder.insert_arc(i, lhs.value());
+                    builder.insert_arc(i, rhs.value());
+                },
+                &Unit(_) => {},
+                &IntegerConstant(_, _) => {},
+                &BooleanConstant(_, _) => {},
+                &UnaryPrefixedExpression(_, inner, _) => builder.insert_arc(i, inner.value()),
+                &Variable(_, _) => {},
+                &FunctionInvocation(_, _, _) => {},
+            }
         }
     }
 }

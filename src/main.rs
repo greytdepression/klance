@@ -1,4 +1,5 @@
 #![feature(if_let_guard)]
+#![allow(warnings)]
 #[macro_use]
 
 mod lexer;
@@ -6,6 +7,7 @@ mod parser;
 mod util;
 mod datastructure;
 mod macros;
+mod typechecker;
 
 use lexer::Lexer;
 use parser::Parser;
